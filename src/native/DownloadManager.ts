@@ -10,6 +10,7 @@ interface EnqueueOptions {
   wifiOnly?: boolean;
   parallelDownloads?: number;
   resumeAutomatically?: boolean;
+  smartFilename?: boolean;
 }
 
 interface NativeDownloadManagerShape {
@@ -34,6 +35,7 @@ interface NativeDownloadManagerShape {
   setAnalyticsEnabled(enabled: boolean): Promise<boolean>;
   trackEvent(name: string, properties: Record<string, string | number | boolean>): Promise<boolean>;
   inspectManifest(sourceUrl: string, pageUrl: string, title: string): Promise<DetectedMedia[]>;
+  setKeepScreenAwake(enabled: boolean): Promise<boolean>;
 }
 
 const nativeModule = NativeModules.VDDownloadManager as NativeDownloadManagerShape | undefined;
@@ -47,8 +49,12 @@ function requireNative(): NativeDownloadManagerShape {
 
 export const downloadManager = {
   list: () => requireNative().listDownloads(),
-  enqueue: ({media, cookie, userAgent, destinationUri, wifiOnly, parallelDownloads, resumeAutomatically}: EnqueueOptions) => {
-    const suggested = media.qualityLabel && media.qualityLabel !== 'Source'
+  enqueue: ({media, cookie, userAgent, destinationUri, wifiOnly, parallelDownloads, resumeAutomatically, smartFilename}: EnqueueOptions) => {
+    const sourceBase = (() => {
+      try { return decodeURIComponent(new URL(media.sourceUrl).pathname.split('/').pop() || 'download').replace(/\.[a-z0-9]{2,8}$/i, ''); }
+      catch { return 'download'; }
+    })();
+    const suggested = smartFilename === false ? sourceBase : media.qualityLabel && media.qualityLabel !== 'Source'
       ? `${media.title} - ${media.qualityLabel}`
       : media.title;
     return requireNative().enqueueDownload({
@@ -82,4 +88,5 @@ export const downloadManager = {
   setAnalyticsEnabled: (enabled: boolean) => requireNative().setAnalyticsEnabled(enabled),
   trackEvent: (name: string, properties: Record<string, string | number | boolean> = {}) => requireNative().trackEvent(name, properties),
   inspectManifest: (sourceUrl: string, pageUrl: string, title: string) => requireNative().inspectManifest(sourceUrl, pageUrl, title),
+  setKeepScreenAwake: (enabled: boolean) => requireNative().setKeepScreenAwake(enabled),
 };

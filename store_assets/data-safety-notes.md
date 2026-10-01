@@ -46,5 +46,5 @@ Media, download records, browser history, bookmarks, WebView cookies, preference
 
 - Analytics is sent over HTTPS.
 - Users can clear local browser and app data.
-- Define and publish the server retention period before production release.
+- Raw Old Alex Hub analytics events are retained for up to 24 months, then deleted or retained only in aggregated form without an installation identifier.
 - Provide a support process for analytics access or deletion requests tied to an installation ID where technically feasible.

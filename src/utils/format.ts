@@ -46,6 +46,8 @@ export function formatDate(timestamp?: number): string {
 export function cleanFilename(value: string, extension: string): string {
   const suffix = extension ? `.${extension.replace(/^\./, '')}` : '';
   const base = value
+    // Control characters and Android-invalid filename characters are removed together.
+    // eslint-disable-next-line no-control-regex
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/[. ]+$/g, '')

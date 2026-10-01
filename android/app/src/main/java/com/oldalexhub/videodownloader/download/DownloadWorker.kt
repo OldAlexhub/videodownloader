@@ -260,6 +260,10 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
           connection.disconnect()
           throw IOException("Segment request failed with HTTP $code")
         }
+        if (segment.rangeStart != null && code != HttpURLConnection.HTTP_PARTIAL) {
+          connection.disconnect()
+          throw DownloadFailure("range_rejected", "The source server rejected a required media segment range.")
+        }
         connection.inputStream.use { input -> input.copyTo(output, BUFFER_SIZE) }
         connection.disconnect()
         index = position + 1
@@ -391,15 +395,15 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
         "image" -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         else -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
       }
-      val folder = when (record.mediaType) {
-        "audio" -> "Audio"
-        "image" -> "Images"
-        else -> "Videos"
+      val relativePath = when (record.mediaType) {
+        "audio" -> "${Environment.DIRECTORY_MUSIC}/Video Downloader & Media Saver/Audio"
+        "image" -> "${Environment.DIRECTORY_PICTURES}/Video Downloader & Media Saver/Images"
+        else -> "${Environment.DIRECTORY_MOVIES}/Video Downloader & Media Saver/Videos"
       }
       val values = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, name)
         put(MediaStore.MediaColumns.MIME_TYPE, record.mimeType)
-        put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/Video Downloader & Media Saver/$folder")
+        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
         put(MediaStore.MediaColumns.IS_PENDING, 1)
       }
       val uri = applicationContext.contentResolver.insert(collection, values)

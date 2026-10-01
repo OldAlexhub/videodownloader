@@ -145,8 +145,8 @@ export function BrowserScreen() {
         if (found.isManifest) {
           downloadManager.inspectManifest(found.sourceUrl, active.url, enriched.title)
             .then(items => items.forEach(addDetectedMedia))
-            .catch(error => {
-              if (String(error).includes('Protected')) addDetectedMedia({...enriched, isProtected: true});
+            .catch(manifestError => {
+              if (String(manifestError).includes('Protected')) addDetectedMedia({...enriched, isProtected: true});
               else addDetectedMedia(enriched);
             });
         } else addDetectedMedia(enriched);
@@ -182,6 +182,22 @@ export function BrowserScreen() {
 
   const pageItems = useMemo(() => detectedMedia.filter(item => item.pageUrl === active.url || detectedMedia.length === 1), [active.url, detectedMedia]);
   const saved = bookmarks.some(item => item.url === active.url);
+
+  const openDetectedMedia = () => {
+    if (settings.defaultQuality === 'ask') {
+      setQualityVisible(true);
+      return;
+    }
+    const usable = pageItems.filter(item => !item.isProtected);
+    const sorted = [...usable].sort((a, b) => (b.height || 0) - (a.height || 0) || (b.estimatedBytes || 0) - (a.estimatedBytes || 0));
+    const chosen = settings.defaultQuality === 'best'
+      ? sorted[0]
+      : settings.defaultQuality === 'smallest'
+        ? sorted[sorted.length - 1]
+        : usable.find(item => item.height === 720) || sorted.find(item => (item.height || 0) <= 1080) || sorted[Math.floor(sorted.length / 2)];
+    if (chosen) enqueueMedia(chosen, undefined, USER_AGENT);
+    else setQualityVisible(true);
+  };
 
   if (!active.url) {
     return (
@@ -284,16 +300,14 @@ export function BrowserScreen() {
           onError={(event: {nativeEvent: {description?: string}}) => {setLoading(false); setError(event.nativeEvent.description || 'Check your connection and try again.');}}
           onHttpError={(event: {nativeEvent: {statusCode: number}}) => {if (event.nativeEvent.statusCode >= 400) setError(`The website returned error ${event.nativeEvent.statusCode}.`);}}
           onShouldStartLoadWithRequest={(request: {url: string; isTopFrame?: boolean}) => {
-            if (!request.isTopFrame) {
-              const candidate = inferMediaFromUrl(request.url, active.url, pageTitle);
-              if (candidate) addDetectedMedia(candidate);
-            }
+            const candidate = inferMediaFromUrl(request.url, active.url, pageTitle);
+            if (candidate) addDetectedMedia(candidate);
             return true;
           }}
         />
       )}
       {pageItems.length > 0 ? (
-        <Pressable onPress={() => setQualityVisible(true)} style={styles.mediaFound}>
+        <Pressable onPress={openDetectedMedia} style={styles.mediaFound}>
           <Download color={colors.white} size={18} />
           <Text style={styles.mediaFoundText}>Media found · {pageItems.length}</Text>
         </Pressable>

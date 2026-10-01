@@ -49,6 +49,7 @@ class DownloadDatabase private constructor(context: Context) :
         work_id TEXT
         ,wifi_only INTEGER NOT NULL DEFAULT 0
         ,auto_resume INTEGER NOT NULL DEFAULT 1
+        ,hidden_downloads INTEGER NOT NULL DEFAULT 0
       )
       """.trimIndent(),
     )
@@ -64,6 +65,9 @@ class DownloadDatabase private constructor(context: Context) :
     if (oldVersion < 3) {
       db.execSQL("ALTER TABLE downloads ADD COLUMN wifi_only INTEGER NOT NULL DEFAULT 0")
       db.execSQL("ALTER TABLE downloads ADD COLUMN auto_resume INTEGER NOT NULL DEFAULT 1")
+    }
+    if (oldVersion < 4) {
+      db.execSQL("ALTER TABLE downloads ADD COLUMN hidden_downloads INTEGER NOT NULL DEFAULT 0")
     }
   }
 
@@ -93,7 +97,7 @@ class DownloadDatabase private constructor(context: Context) :
 
   fun delete(id: String): Int = writableDatabase.delete("downloads", "id = ?", arrayOf(id))
 
-  fun clearCompleted(): Int = writableDatabase.delete("downloads", "status = 'completed'", null)
+  fun clearCompleted(): Int = writableDatabase.update("downloads", ContentValues().apply { put("hidden_downloads", 1) }, "status = 'completed'", null)
 
   fun deleteAll() {
     writableDatabase.delete("downloads", null, null)
@@ -105,7 +109,7 @@ class DownloadDatabase private constructor(context: Context) :
   ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L }
 
   companion object {
-    private const val VERSION = 3
+    private const val VERSION = 4
     @Volatile private var instance: DownloadDatabase? = null
 
     fun get(context: Context): DownloadDatabase = instance ?: synchronized(this) {
@@ -151,6 +155,7 @@ data class DownloadRecord(
   val workId: String?,
   val wifiOnly: Boolean,
   val autoResume: Boolean,
+  val hiddenFromDownloads: Boolean,
 ) {
   companion object {
     fun from(cursor: Cursor): DownloadRecord {
@@ -199,6 +204,7 @@ data class DownloadRecord(
         workId = text("work_id"),
         wifiOnly = cursor.getInt(cursor.getColumnIndexOrThrow("wifi_only")) == 1,
         autoResume = cursor.getInt(cursor.getColumnIndexOrThrow("auto_resume")) == 1,
+        hiddenFromDownloads = cursor.getInt(cursor.getColumnIndexOrThrow("hidden_downloads")) == 1,
       )
     }
   }

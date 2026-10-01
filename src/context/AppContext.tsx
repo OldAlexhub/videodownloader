@@ -108,6 +108,11 @@ export function AppProvider({children}: PropsWithChildren) {
   }, [refreshDownloads]);
 
   useEffect(() => {
+    const active = downloads.some(item => ['queued', 'preparing', 'downloading', 'retrying', 'processing'].includes(item.status));
+    downloadManager.setKeepScreenAwake(settings.keepScreenAwake && active).catch(() => undefined);
+  }, [downloads, settings.keepScreenAwake]);
+
+  useEffect(() => {
     const timer = setInterval(refreshDownloads, 1200);
     const shareTimer = setInterval(() => {
       downloadManager.initialSharedUrl().then(url => {
@@ -214,7 +219,7 @@ export function AppProvider({children}: PropsWithChildren) {
             {text: 'Cancel', style: 'cancel', onPress: () => resolve()},
             {text: 'Open existing', onPress: () => { downloadManager.open(duplicate.id); resolve(); }},
             {text: 'Download another copy', onPress: async () => {
-              await downloadManager.enqueue({media: item, cookie, userAgent, destinationUri: settings.destinationUri, wifiOnly: settings.wifiOnly, parallelDownloads: settings.parallelDownloads, resumeAutomatically: settings.resumeAutomatically});
+              await downloadManager.enqueue({media: item, cookie, userAgent, destinationUri: settings.destinationUri, wifiOnly: settings.wifiOnly, parallelDownloads: settings.parallelDownloads, resumeAutomatically: settings.resumeAutomatically, smartFilename: settings.smartFilename});
               await refreshDownloads();
               resolve();
             }},
@@ -230,6 +235,7 @@ export function AppProvider({children}: PropsWithChildren) {
       wifiOnly: settings.wifiOnly,
       parallelDownloads: settings.parallelDownloads,
       resumeAutomatically: settings.resumeAutomatically,
+      smartFilename: settings.smartFilename,
     });
     await refreshDownloads();
     setActiveTab('downloads');

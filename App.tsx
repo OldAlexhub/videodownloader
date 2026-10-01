@@ -9,7 +9,6 @@ import {DownloadsScreen} from './src/screens/DownloadsScreen';
 import {LibraryScreen} from './src/screens/LibraryScreen';
 import {SettingsScreen} from './src/screens/SettingsScreen';
 import {SmartToolsScreen} from './src/screens/SmartToolsScreen';
-import {colors} from './src/theme';
 import {downloadManager} from './src/native/DownloadManager';
 import {interstitialController} from './src/ads/interstitial';
 import {AdConsentProvider} from './src/ads/AdConsentContext';

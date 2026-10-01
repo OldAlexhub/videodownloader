@@ -55,7 +55,7 @@ export function inferMediaFromUrl(
     return null;
   }
   const lowerUrl = url.toLowerCase();
-  if (/sprite|favicon|icon|logo|avatar|emoji|pixel|tracking|beacon|ads?[\/.\-_]/i.test(lowerUrl)) {
+  if (/sprite|favicon|icon|logo|avatar|emoji|pixel|tracking|beacon|ads?[/._-]/i.test(lowerUrl)) {
     return null;
   }
   const size = Number(headers['content-length'] || 0);
@@ -92,6 +92,13 @@ export const MEDIA_DETECTOR_SCRIPT = `
   if (window.__VDMS_INSTALLED__) return true;
   window.__VDMS_INSTALLED__ = true;
   const sent = new Set();
+  if (navigator.requestMediaKeySystemAccess) {
+    const originalMediaKeys = navigator.requestMediaKeySystemAccess.bind(navigator);
+    navigator.requestMediaKeySystemAccess = function () {
+      window.ReactNativeWebView.postMessage(JSON.stringify({type:'protected'}));
+      return originalMediaKeys.apply(navigator, arguments);
+    };
+  }
   const emit = (url, meta) => {
     if (!url || sent.has(url) || !/^https?:/i.test(url)) return;
     sent.add(url);
@@ -122,7 +129,7 @@ export const MEDIA_DETECTOR_SCRIPT = `
       const result = originalFetch.apply(this, arguments);
       result.then((response) => {
         const type = response.headers.get('content-type') || '';
-        if (/^(video|audio|image)\//i.test(type) || /mpegurl|dash\+xml/i.test(type)) {
+        if (/^(video|audio|image)\\//i.test(type) || /mpegurl|dash\\+xml/i.test(type)) {
           emit(response.url || url, {type:type, contentLength:response.headers.get('content-length') || ''});
         }
       }).catch(() => {});
@@ -138,7 +145,7 @@ export const MEDIA_DETECTOR_SCRIPT = `
   XMLHttpRequest.prototype.send = function() {
     this.addEventListener('load', () => {
       const type = this.getResponseHeader('content-type') || '';
-      if (/^(video|audio|image)\//i.test(type) || /mpegurl|dash\+xml/i.test(type)) {
+      if (/^(video|audio|image)\\//i.test(type) || /mpegurl|dash\\+xml/i.test(type)) {
         emit(this.responseURL || this.__vdmsUrl, {type:type, contentLength:this.getResponseHeader('content-length') || ''});
       }
     });

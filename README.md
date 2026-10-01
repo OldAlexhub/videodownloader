@@ -91,9 +91,9 @@ Private sessions use WebView incognito mode, do not add local history, disable s
 Android 10 and newer use MediaStore with `RELATIVE_PATH` and pending-item publication. Files are organized under:
 
 ```text
-Download/Video Downloader & Media Saver/Videos
-Download/Video Downloader & Media Saver/Audio
-Download/Video Downloader & Media Saver/Images
+Movies/Video Downloader & Media Saver/Videos
+Music/Video Downloader & Media Saver/Audio
+Pictures/Video Downloader & Media Saver/Images
 ```
 
 Users can select another folder through the Storage Access Framework. The app persists the granted URI permission. It does not request `MANAGE_EXTERNAL_STORAGE`.
@@ -184,14 +184,13 @@ releases/builds/VideoDownloader-release.aab
 
 ## Google Play preparation
 
-1. Replace the privacy policy contact and effective date placeholders.
-2. Host the privacy policy at a public HTTPS URL.
-3. Review `store_assets/data-safety-notes.md` against the final server and AdMob configuration.
-4. Complete AdMob app readiness and UMP messages.
-5. Run production QA on gesture navigation and 3-button navigation.
-6. Test direct MP4, audio, unencrypted HLS, supported progressive DASH, failures, pause, resume, process recreation, sharing, moving, renaming, and deletion.
-7. Verify test ad units in debug and production IDs only in the signed release.
-8. Upload the signed AAB from `releases/builds` to an internal testing track first.
+1. Host the completed privacy policy at a public HTTPS URL.
+2. Review `store_assets/data-safety-notes.md` against the deployed server and AdMob configuration.
+3. Complete AdMob app readiness and UMP messages.
+4. Run production QA on gesture navigation and 3-button navigation.
+5. Test direct MP4, audio, unencrypted HLS, supported progressive DASH, failures, pause, resume, process recreation, sharing, moving, renaming, and deletion.
+6. Verify test ad units in debug and production IDs only in the signed release.
+7. Upload the signed AAB from `releases/builds` to an internal testing track first.
 
 ## Copyright compliance
 

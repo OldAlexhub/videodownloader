@@ -11,6 +11,9 @@ import android.provider.MediaStore
 import android.webkit.CookieManager
 import android.webkit.WebStorage
 import android.webkit.WebView
+import android.view.WindowManager
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
@@ -97,6 +100,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         put("destination_uri", payload.optionalString("destinationUri"))
         put("wifi_only", if (payload.boolean("wifiOnly")) 1 else 0)
         put("auto_resume", if (payload.boolean("resumeAutomatically")) 1 else 0)
+        put("hidden_downloads", 0)
       })
       val maxParallel = payload.int("parallelDownloads", 2).coerceIn(1, 4)
       context.getSharedPreferences("download_settings", 0).edit().putInt("max_parallel", maxParallel).apply()
@@ -307,10 +311,11 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
               val width = resolution?.groupValues?.get(1)?.toIntOrNull() ?: 0
               val height = resolution?.groupValues?.get(2)?.toIntOrNull() ?: 0
               val path = lines.drop(index + 1).firstOrNull { it.isNotBlank() && !it.startsWith('#') } ?: return@forEachIndexed
-              results.pushMap(manifestMap(URI(sourceUrl).resolve(path).toString(), pageUrl, title, "application/vnd.apple.mpegurl", "m3u8", width, height, bandwidth))
+              val muxedAudio = !Regex("(?:^|,)AUDIO=", RegexOption.IGNORE_CASE).containsMatchIn(attrs) && Regex("mp4a|ac-3|ec-3|opus|vorbis", RegexOption.IGNORE_CASE).containsMatchIn(attrs)
+              results.pushMap(manifestMap(URI(sourceUrl).resolve(path).toString(), pageUrl, title, "application/vnd.apple.mpegurl", "m3u8", width, height, bandwidth, muxedAudio))
             }
           }
-          if (results.size() == 0) results.pushMap(manifestMap(sourceUrl, pageUrl, title, "application/vnd.apple.mpegurl", "m3u8", 0, 0, 0))
+          if (results.size() == 0) results.pushMap(manifestMap(sourceUrl, pageUrl, title, "application/vnd.apple.mpegurl", "m3u8", 0, 0, 0, false))
         } else {
           val representation = Regex("<Representation\\b([^>]*)>(.*?)</Representation>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
           representation.findAll(text).forEach { match ->
@@ -322,9 +327,9 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
             val mime = Regex("mimeType=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1) ?: "video/mp4"
             val base = Regex("<BaseURL[^>]*>([^<]+)</BaseURL>", RegexOption.IGNORE_CASE).find(body)?.groupValues?.get(1)?.trim()
             val url = if (base != null && !text.contains("SegmentTemplate", true) && !text.contains("SegmentList", true)) URI(sourceUrl).resolve(base).toString() else sourceUrl
-            results.pushMap(manifestMap(url, pageUrl, title, if (url == sourceUrl) "application/dash+xml" else mime, if (url == sourceUrl) "mpd" else mime.substringAfter('/', "mp4").substringBefore('+'), width, height, bandwidth))
+            results.pushMap(manifestMap(url, pageUrl, title, if (url == sourceUrl) "application/dash+xml" else mime, if (url == sourceUrl) "mpd" else mime.substringAfter('/', "mp4").substringBefore('+'), width, height, bandwidth, mime.startsWith("audio/")))
           }
-          if (results.size() == 0) results.pushMap(manifestMap(sourceUrl, pageUrl, title, "application/dash+xml", "mpd", 0, 0, 0))
+          if (results.size() == 0) results.pushMap(manifestMap(sourceUrl, pageUrl, title, "application/dash+xml", "mpd", 0, 0, 0, false))
         }
         results
       }.fold(promise::resolve) { error -> promise.reject(if (error.message?.contains("Protected") == true) "E_PROTECTED" else "E_MANIFEST", error.message, error) }
@@ -333,30 +338,52 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
 
   @ReactMethod
   fun clearBrowserData(kind: String, promise: Promise) {
-    runCatching {
-      if (kind == "cookies" || kind == "all") CookieManager.getInstance().removeAllCookies(null)
-      if (kind == "cache" || kind == "all") WebView(context).apply { clearCache(true); clearHistory(); destroy() }
-      if (kind == "all") WebStorage.getInstance().deleteAllData()
-      true
-    }.fold(promise::resolve) { error -> promise.reject("E_BROWSER_DATA", error.message, error) }
+    Handler(Looper.getMainLooper()).post {
+      runCatching {
+        if (kind == "cookies" || kind == "all") CookieManager.getInstance().removeAllCookies(null)
+        if (kind == "cache" || kind == "all") WebView(context).apply { clearCache(true); clearHistory(); destroy() }
+        if (kind == "all") WebStorage.getInstance().deleteAllData()
+        true
+      }.fold(promise::resolve) { error -> promise.reject("E_BROWSER_DATA", error.message, error) }
+    }
   }
 
   @ReactMethod
   fun clearAllData(promise: Promise) {
-    runCatching {
-      database.list().forEach { record -> record.localUri?.let { runCatching { context.contentResolver.delete(Uri.parse(it), null, null) } } }
-      database.deleteAll()
-      File(context.cacheDir, "download-parts").deleteRecursively()
-      CookieManager.getInstance().removeAllCookies(null)
-      WebStorage.getInstance().deleteAllData()
-      true
-    }.fold(promise::resolve) { error -> promise.reject("E_CLEAR_ALL", error.message, error) }
+    Thread {
+      runCatching {
+        database.list().forEach { record -> record.localUri?.let { runCatching { context.contentResolver.delete(Uri.parse(it), null, null) } } }
+        database.deleteAll()
+        File(context.cacheDir, "download-parts").deleteRecursively()
+      }.fold(
+        onSuccess = {
+          Handler(Looper.getMainLooper()).post {
+            runCatching {
+              CookieManager.getInstance().removeAllCookies(null)
+              WebStorage.getInstance().deleteAllData()
+              true
+            }.fold(promise::resolve) { error -> promise.reject("E_CLEAR_ALL", error.message, error) }
+          }
+        },
+        onFailure = { error -> promise.reject("E_CLEAR_ALL", error.message, error) },
+      )
+    }.start()
   }
 
   @ReactMethod
   fun setAnalyticsEnabled(enabled: Boolean, promise: Promise) {
     Telemetry.setEnabled(context, enabled)
     promise.resolve(true)
+  }
+
+  @ReactMethod
+  fun setKeepScreenAwake(enabled: Boolean, promise: Promise) {
+    val activity = context.currentActivity ?: return promise.resolve(false)
+    activity.runOnUiThread {
+      if (enabled) activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      promise.resolve(true)
+    }
   }
 
   @ReactMethod
@@ -383,7 +410,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
 
   private fun requestNotificationPermission() {
     if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-      context.currentActivity?.let { activity: Activity -> ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4102) }
+      context.currentActivity?.let { activity: Activity -> activity.runOnUiThread { ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4102) } }
     }
   }
 
@@ -394,14 +421,14 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
       .replace(Regex("\\s+"), " ")
       .trim().trimEnd('.', ' ').take(160).ifBlank { "download.bin" }
 
-    private fun manifestMap(url: String, pageUrl: String, title: String, mime: String, extension: String, width: Int, height: Int, bandwidth: Long): WritableMap = Arguments.createMap().apply {
+    private fun manifestMap(url: String, pageUrl: String, title: String, mime: String, extension: String, width: Int, height: Int, bandwidth: Long, hasAudio: Boolean): WritableMap = Arguments.createMap().apply {
       putString("id", "$url|$height")
       putString("groupKey", "${runCatching { Uri.parse(pageUrl).host }.getOrNull()}|${title.lowercase()}|video")
       putString("sourceUrl", url); putString("pageUrl", pageUrl); putString("title", title)
       putString("mimeType", mime); putString("extension", extension); putString("mediaType", "video")
       putString("qualityLabel", if (height > 0) "${height}p" else "Adaptive stream")
       if (height > 0) { putString("resolution", "${height}p"); putInt("height", height); putInt("width", width) }
-      putDouble("estimatedBytes", 0.0); putBoolean("hasAudio", true); putBoolean("isManifest", extension == "m3u8" || extension == "mpd")
+      putDouble("estimatedBytes", 0.0); putBoolean("hasAudio", hasAudio); putBoolean("isManifest", extension == "m3u8" || extension == "mpd")
       putBoolean("isProtected", false); putDouble("confidence", if (height > 0) 96.0 else 86.0)
       if (bandwidth > 0) putString("videoCodec", "${bandwidth / 1000} kbps")
     }
@@ -424,4 +451,5 @@ private fun DownloadRecord.toWritableMap(): WritableMap = Arguments.createMap().
   putString("localUri", localUri); putString("thumbnailUri", thumbnailUri); putDouble("createdAt", createdAt.toDouble())
   startedAt?.let { putDouble("startedAt", it.toDouble()) }; completedAt?.let { putDouble("completedAt", it.toDouble()) }
   putInt("retryCount", retryCount); putString("failureCode", failureCode); putString("failureMessage", failureMessage); putString("hash", contentHash)
+  putBoolean("hiddenFromDownloads", hiddenFromDownloads)
 }

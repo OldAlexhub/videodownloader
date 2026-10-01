@@ -26,6 +26,17 @@ export function QualitySheet({visible, items, onClose, onDownload}: Props) {
   const selected = items.find(item => item.id === selectedId) || recommended;
   const first = items[0];
 
+  const choosePreset = (preset: 'best' | 'balanced' | 'smallest') => {
+    const usable = items.filter(item => !item.isProtected);
+    const sorted = [...usable].sort((a, b) => (b.height || 0) - (a.height || 0) || (b.estimatedBytes || 0) - (a.estimatedBytes || 0));
+    const choice = preset === 'best'
+      ? sorted[0]
+      : preset === 'smallest'
+        ? sorted[sorted.length - 1]
+        : usable.find(item => item.height === 720) || sorted.find(item => (item.height || 0) <= 1080) || sorted[Math.floor(sorted.length / 2)];
+    if (choice) setSelectedId(choice.id);
+  };
+
   const submit = async () => {
     if (!selected || busy) {
       return;
@@ -56,6 +67,11 @@ export function QualitySheet({visible, items, onClose, onDownload}: Props) {
             <Pressable accessibilityLabel="Close" onPress={onClose} style={styles.close}><X color={colors.ink} size={21} /></Pressable>
           </View>
           <ScrollView contentContainerStyle={styles.options} style={styles.optionScroll}>
+            <View style={styles.presets}>
+              <Preset label="Best Available" onPress={() => choosePreset('best')} />
+              <Preset label="Balanced" onPress={() => choosePreset('balanced')} />
+              <Preset label="Smallest" onPress={() => choosePreset('smallest')} />
+            </View>
             {items.map(item => {
               const active = item.id === selected?.id;
               const Icon = item.mediaType === 'video' ? FileVideo : item.mediaType === 'audio' ? FileAudio : ImageIcon;
@@ -97,6 +113,10 @@ export function QualitySheet({visible, items, onClose, onDownload}: Props) {
   );
 }
 
+function Preset({label, onPress}: {label: string; onPress: () => void}) {
+  return <Pressable onPress={onPress} style={styles.preset}><Text style={styles.presetText}>{label}</Text></Pressable>;
+}
+
 const styles = StyleSheet.create({
   backdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(3,16,43,0.52)'},
   sheet: {maxHeight: '86%', backgroundColor: colors.white, borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingTop: 8},
@@ -110,6 +130,9 @@ const styles = StyleSheet.create({
   close: {padding: spacing.sm},
   optionScroll: {borderTopWidth: 1, borderTopColor: colors.line},
   options: {padding: spacing.lg, gap: 10},
+  presets: {flexDirection: 'row', gap: 7, marginBottom: 2},
+  preset: {flex: 1, minHeight: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.sky100},
+  presetText: {fontSize: 10, fontWeight: '800', color: colors.blue700, textAlign: 'center'},
   option: {flexDirection: 'row', padding: spacing.md, borderWidth: 1, borderColor: colors.line, borderRadius: radius.lg, backgroundColor: colors.white},
   optionActive: {borderColor: colors.blue600, backgroundColor: '#F2F8FF'},
   disabled: {opacity: 0.5},

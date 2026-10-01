@@ -68,6 +68,7 @@ export interface DownloadItem {
   failureCode?: string;
   failureMessage?: string;
   hash?: string;
+  hiddenFromDownloads?: boolean;
 }
 
 export interface BrowserHistoryItem {

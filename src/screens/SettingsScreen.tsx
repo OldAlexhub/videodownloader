@@ -49,6 +49,7 @@ export function SettingsScreen() {
           <SettingRow icon={<Folder color={colors.blue700} size={20} />} title="Default folder" value={settings.destinationName} onPress={chooseFolder} />
           <ToggleRow icon={<Wifi color={colors.blue700} size={20} />} title="Wi-Fi only" description="Queue downloads until Wi-Fi is available" value={settings.wifiOnly} onChange={value => updateSettings({wifiOnly: value})} />
           <ToggleRow icon={<RotateCcw color={colors.blue700} size={20} />} title="Resume automatically" description="Retry safe resumable downloads after interruptions" value={settings.resumeAutomatically} onChange={value => updateSettings({resumeAutomatically: value})} />
+          <ToggleRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Keep screen awake" description="Only while an active download is visible in the foreground" value={settings.keepScreenAwake} onChange={value => updateSettings({keepScreenAwake: value})} />
           <ToggleRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Smart filenames" description="Use page titles and actual quality" value={settings.smartFilename} onChange={value => updateSettings({smartFilename: value})} />
           <ToggleRow icon={<Database color={colors.blue700} size={20} />} title="Duplicate detection" description="Warn before downloading a known match" value={settings.duplicateDetection} onChange={value => updateSettings({duplicateDetection: value})} last />
         </SettingsSection>
@@ -69,7 +70,7 @@ export function SettingsScreen() {
         </SettingsSection>
 
         <SettingsSection title="About">
-          <View style={styles.aboutRow}><Image source={require('../../assets/logo.png')} style={{width: 54, height: 54, borderRadius: 15}} /><View><Text style={styles.aboutName}>Video Downloader & Media Saver</Text><Text style={styles.aboutMeta}>Version 1.0.0 · Old Alex Hub</Text></View></View>
+          <View style={styles.aboutRow}><Image source={require('../../assets/logo.png')} style={imageStyles.logo} /><View><Text style={styles.aboutName}>Video Downloader & Media Saver</Text><Text style={styles.aboutMeta}>Version 1.0.0 · Old Alex Hub</Text></View></View>
           <View style={styles.notice}><Text style={styles.noticeText}>Only download media you own, have permission to download, or that is made available for downloading by the content provider. Protected media is not supported.</Text></View>
           <SettingRow icon={<Trash2 color={colors.danger} size={20} />} title="Clear all local app data" danger onPress={clearAll} last />
         </SettingsSection>
@@ -136,4 +137,8 @@ const styles = StyleSheet.create({
   privacyContent: {paddingBottom: 40},
   privacyHeading: {fontSize: 16, fontWeight: '900', color: colors.ink, marginTop: spacing.lg},
   privacyText: {fontSize: 13, lineHeight: 21, color: colors.muted, marginTop: spacing.sm},
+});
+
+const imageStyles = StyleSheet.create({
+  logo: {width: 54, height: 54, borderRadius: 15},
 });

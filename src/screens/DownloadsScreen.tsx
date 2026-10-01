@@ -17,7 +17,7 @@ export function DownloadsScreen() {
   const [selected, setSelected] = useState<DownloadItem>();
   const [rename, setRename] = useState<DownloadItem>();
   const active = useMemo(() => downloads.filter(item => ['queued', 'preparing', 'downloading', 'paused', 'retrying', 'processing'].includes(item.status)), [downloads]);
-  const completed = useMemo(() => downloads.filter(item => item.status === 'completed'), [downloads]);
+  const completed = useMemo(() => downloads.filter(item => item.status === 'completed' && !item.hiddenFromDownloads), [downloads]);
   const failed = useMemo(() => downloads.filter(item => ['failed', 'cancelled'].includes(item.status)), [downloads]);
 
   const perform = async (action: () => Promise<unknown>) => {

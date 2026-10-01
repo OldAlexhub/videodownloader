@@ -73,7 +73,7 @@ The app is not designed to bypass DRM, authentication, subscriptions, paid acces
 
 ## Data retention
 
-Local data remains until the user deletes it, clears app data, removes the app, or Android removes temporary files. Old Alex Hub analytics retention should be limited to the period reasonably needed for product analysis, security, and performance reporting. [Insert the final server retention period before publication.]
+Local data remains until the user deletes it, clears app data, removes the app, or Android removes temporary files. Old Alex Hub retains raw analytics events for up to 24 months for product analysis, security, and performance reporting. Events may then be deleted or retained only in aggregated form that is no longer linked to an installation identifier.
 
 Google retains advertising and consent data according to its own policies and account configuration.
 

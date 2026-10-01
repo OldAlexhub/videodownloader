@@ -18,7 +18,8 @@
       android:supportsRtl="true">
       <meta-data
         android:name="com.google.android.gms.ads.APPLICATION_ID"
-        android:value="${adMobAppId}" />
+        android:value="${adMobAppId}"
+        tools:replace="android:value" />
       <activity
         android:name=".MainActivity"
         android:label="@string/app_name"
