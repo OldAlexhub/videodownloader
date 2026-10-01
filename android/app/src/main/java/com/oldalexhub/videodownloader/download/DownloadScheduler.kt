@@ -28,6 +28,7 @@ object DownloadScheduler {
       .addTag("media-download-$id")
       .build()
     DownloadDatabase.get(context).update(id, ContentValues().apply { put("work_id", request.id.toString()) })
+    DownloadNotifications.cancel(context, id)
     WorkManager.getInstance(context).enqueueUniqueWork("media-download-$id", ExistingWorkPolicy.REPLACE, request)
   }
 
@@ -37,7 +38,8 @@ object DownloadScheduler {
       put("speed_bps", 0)
       put("eta_seconds", 0)
     })
-    WorkManager.getInstance(context).cancelUniqueWork("media-download-$id")
+    val operation = WorkManager.getInstance(context).cancelUniqueWork("media-download-$id")
+    operation.result.addListener({ DownloadDatabase.get(context).get(id)?.let { DownloadNotifications.showPaused(context, it) } }, { command -> command.run() })
   }
 
   fun cancel(context: Context, id: String) {
@@ -48,6 +50,7 @@ object DownloadScheduler {
       put("failure_message", "Download cancelled.")
     })
     WorkManager.getInstance(context).cancelUniqueWork("media-download-$id")
+    DownloadNotifications.cancel(context, id)
     DownloadWorker.partFile(context, id).delete()
     DownloadWorker.stateFile(context, id).delete()
   }

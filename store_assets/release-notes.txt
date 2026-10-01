@@ -1,0 +1,9 @@
+Version 1.0.0
+
+- Browse supported websites and detect downloadable media
+- Choose real source qualities before downloading
+- Run reliable background downloads with pause and resume where supported
+- Organize videos, audio, and images in a searchable local library
+- Play downloaded media with built-in Media3 controls
+- Find duplicate files and review local storage use
+- Use the complete downloader free with no account or subscription

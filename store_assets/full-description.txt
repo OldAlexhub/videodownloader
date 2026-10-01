@@ -1,0 +1,51 @@
+Save supported media with a fast, clear download workflow.
+
+Video Downloader & Media Saver includes a built-in browser that detects media exposed by supported websites. When media is available, choose from the real source qualities shown by the page and begin downloading immediately.
+
+FULL DOWNLOADER, COMPLETELY FREE
+
+There are no subscriptions, paid speed controls, download credits, quality locks, accounts, or logins. The app is supported by advertising, but an ad is never required before a download starts.
+
+SMART MEDIA DETECTION
+
+Browse supported pages and let the app identify downloadable video, audio, images, HLS, and supported DASH media. Related qualities are grouped into one clear selection screen so you can compare resolution, format, audio availability, and estimated size.
+
+RELIABLE DOWNLOAD MANAGER
+
+- Background downloads
+- Live progress, transfer speed, and ETA
+- Pause and resume when the source server supports it
+- Safe retries after network interruptions
+- Wi-Fi-only option
+- Up to four parallel downloads
+- Clear completed and failed sections
+- No artificial app-side speed limit
+
+LOCAL MEDIA LIBRARY
+
+Organize downloaded videos, audio, and images. Search, filter, sort, play, open, share, rename, move, inspect, or delete files from one clean library.
+
+BUILT-IN PLAYER
+
+Play local video and audio with seek controls, playback speed, fullscreen support, subtitle display, and audio track selection where the file provides those features.
+
+USEFUL SMART TOOLS
+
+- Smart filenames based on available page metadata
+- Exact hash and source-based duplicate detection
+- Transparent quality recommendations
+- Storage overview for videos, audio, images, and temporary files
+
+MODERN ANDROID STORAGE
+
+Downloads use Android scoped storage. Save to the organized default media folders or choose a destination with the Android folder picker. Broad file access is not required.
+
+PRIVACY AND CONTROL
+
+Downloaded media stays on your device and is not uploaded to Old Alex Hub. Optional performance analytics can send limited text metadata, source domain, results, and ad impression events to help improve reliability. Analytics can be turned off in Settings. Google AdMob supports the free app and may process advertising data according to consent and device settings.
+
+IMPORTANT
+
+Only download media you own, have permission to download, or that is made available for downloading by the content provider. The app does not bypass DRM, authentication, subscriptions, paywalls, or access controls. Protected and unsupported media cannot be downloaded.
+
+Compatibility depends on the website, media format, source availability, and Android device capabilities.

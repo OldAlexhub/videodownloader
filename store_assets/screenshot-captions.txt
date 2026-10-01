@@ -1,0 +1,8 @@
+01 Browser: Browse supported sites with a clean address bar and private-session control.
+02 Media detected: A compact Media found indicator appears without interrupting the page.
+03 Quality selector: Compare actual source quality, format, audio availability, and estimated size.
+04 Downloads: Follow live progress, speed, ETA, pause, resume, and retry controls.
+05 Library: Search and organize downloaded videos, audio, and images.
+06 Smart Tools: Find duplicates, use smart filenames, compare quality, and review storage.
+07 Settings: Control download rules, browser data, privacy choices, and analytics.
+08 Player: Play local media with seek, speed, tracks, subtitles, and fullscreen controls.
