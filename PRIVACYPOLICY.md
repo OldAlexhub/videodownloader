@@ -2,9 +2,9 @@
 
 Developer: Old Alex Hub
 
-Effective date: [Insert effective date before publication]
+Effective date: 10/01/2026
 
-Contact: [Insert privacy contact email before publication]
+Contact: info@oldalexhub.com
 
 ## Overview
 
@@ -93,4 +93,4 @@ This policy may be updated when app features, analytics, advertising configurati
 
 For privacy questions or data requests, contact:
 
-[Insert privacy contact email before publication]
+info@oldalexhub.com

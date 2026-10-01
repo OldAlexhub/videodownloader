@@ -112,7 +112,7 @@ export function AppProvider({children}: PropsWithChildren) {
     const shareTimer = setInterval(() => {
       downloadManager.initialSharedUrl().then(url => {
         if (url) {
-          setBrowserTarget(`${url}#shared=${Date.now()}`);
+          setBrowserTarget(`${url}${url.includes('#') ? '&' : '#'}vdms=${Date.now()}`);
           setActiveTab('browser');
         }
       }).catch(() => undefined);

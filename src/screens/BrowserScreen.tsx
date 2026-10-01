@@ -87,6 +87,15 @@ export function BrowserScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [browserTarget]);
 
+  useEffect(() => {
+    setPrivateMode(settings.privateByDefault);
+  }, [settings.privateByDefault]);
+
+  useEffect(() => {
+    setAddress(active.url);
+    setPageTitle(active.title);
+  }, [active.id, active.title, active.url]);
+
   const navigate = (input: string) => {
     const nextUrl = normalizeAddress(input, settings.searchEngine);
     if (!nextUrl) {
@@ -221,7 +230,7 @@ export function BrowserScreen() {
           ) : null}
           <NativeSponsoredCard />
         </SafeScrollView>
-        <BrowserToolbar tabs={tabs.length} onTabs={() => setTabsVisible(true)} onHome={() => undefined} />
+        <BrowserToolbar tabs={tabs.length} onTabs={() => setTabsVisible(true)} onNew={newTab} />
         <ListModal type={libraryVisible} history={history} bookmarks={bookmarks} onClose={() => setLibraryVisible(null)} onOpen={url => {setLibraryVisible(null); navigate(url);}} />
         <TabsModal visible={tabsVisible} tabs={tabs} activeId={activeId} onClose={() => setTabsVisible(false)} onNew={newTab} onSelect={id => {setActiveId(id); setTabsVisible(false);}} onRemove={closeTab} />
       </View>
@@ -307,8 +316,8 @@ function QuickAction({icon, label, onPress}: {icon: React.ReactNode; label: stri
   return <Pressable onPress={onPress} style={styles.quickAction}><View style={styles.quickIcon}>{icon}</View><Text style={styles.quickLabel}>{label}</Text></Pressable>;
 }
 
-function BrowserToolbar({tabs, onTabs}: {tabs: number; onTabs: () => void; onHome: () => void}) {
-  return <View style={styles.webToolbar}><View style={styles.webAction}><Home color={colors.blue700} size={21} /></View><View style={styles.webAction}><ArrowLeft color="#B8C3D1" size={21} /></View><View style={styles.webAction}><Plus color={colors.ink} size={22} /></View><Pressable onPress={onTabs} style={styles.tabCount}><Text style={styles.tabCountText}>{tabs}</Text></Pressable><Pressable onPress={onTabs} style={styles.webAction}><MoreHorizontal color={colors.ink} size={22} /></Pressable></View>;
+function BrowserToolbar({tabs, onTabs, onNew}: {tabs: number; onTabs: () => void; onNew: () => void}) {
+  return <View style={styles.webToolbar}><View style={styles.webAction}><Home color={colors.blue700} size={21} /></View><View style={styles.webAction}><ArrowLeft color="#B8C3D1" size={21} /></View><Pressable onPress={onNew} style={styles.webAction}><Plus color={colors.ink} size={22} /></Pressable><Pressable onPress={onTabs} style={styles.tabCount}><Text style={styles.tabCountText}>{tabs}</Text></Pressable><Pressable onPress={onTabs} style={styles.webAction}><MoreHorizontal color={colors.ink} size={22} /></Pressable></View>;
 }
 
 function TabsModal({visible, tabs, activeId, onClose, onNew, onSelect, onRemove}: {visible: boolean; tabs: BrowserTab[]; activeId: string; onClose: () => void; onNew: () => void; onSelect: (id: string) => void; onRemove: (id: string) => void}) {

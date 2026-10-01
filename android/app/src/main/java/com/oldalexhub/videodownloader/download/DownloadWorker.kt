@@ -31,6 +31,7 @@ import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.net.URLDecoder
 import java.security.MessageDigest
 import java.util.Locale
 import kotlin.math.max
@@ -166,12 +167,22 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
     val responseLength = connection.contentLengthLong.coerceAtLeast(0)
     val expected = contentRangeTotal ?: if (responseLength > 0) existing + responseLength else record.estimatedBytes
     val supports = response == HttpURLConnection.HTTP_PARTIAL || connection.getHeaderField("Accept-Ranges")?.contains("bytes", true) == true
+    val responseMime = connection.contentType?.substringBefore(';')?.trim()?.takeIf { it.contains('/') }
+    val dispositionName = contentDispositionFilename(connection.getHeaderField("Content-Disposition"))
+    val reliableExtension = dispositionName?.substringAfterLast('.', "")?.filter { it.isLetterOrDigit() }?.take(8)?.lowercase()
+      ?.takeIf { it.isNotBlank() } ?: responseMime?.let(::extensionForMime)
     database.update(id, ContentValues().apply {
       put("status", "downloading")
       put("supports_range", if (supports) 1 else 0)
       if (expected > 0) put("estimated_bytes", expected)
       responseEtag?.let { put("etag", it) }
       responseModified?.let { put("last_modified", it) }
+      responseMime?.let { put("mime_type", it) }
+      reliableExtension?.let {
+        put("extension", it)
+        put("final_filename", replaceExtension(record.finalFilename, it))
+      }
+      dispositionName?.let { put("original_filename", it) }
     })
 
     RandomAccessFile(target, "rw").use { output ->
@@ -534,6 +545,27 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       return String.format(Locale.US, if (speed >= 10) "%.0f %s" else "%.1f %s", speed, units[index])
     }
     private fun replaceExtension(name: String, extension: String): String = "${name.substringBeforeLast('.', name)}.$extension"
+    private fun extensionForMime(mime: String): String? = when (mime.lowercase()) {
+      "video/mp4" -> "mp4"
+      "video/webm" -> "webm"
+      "video/quicktime" -> "mov"
+      "audio/mpeg" -> "mp3"
+      "audio/mp4", "audio/x-m4a" -> "m4a"
+      "audio/aac" -> "aac"
+      "audio/ogg", "video/ogg" -> "ogg"
+      "image/jpeg" -> "jpg"
+      "image/png" -> "png"
+      "image/webp" -> "webp"
+      else -> null
+    }
+    private fun contentDispositionFilename(value: String?): String? {
+      if (value.isNullOrBlank()) return null
+      val encoded = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE).find(value)?.groupValues?.get(1)
+      if (encoded != null) return runCatching { URLDecoder.decode(encoded, "UTF-8") }.getOrNull()?.substringAfterLast('/')?.substringAfterLast('\\')
+      return Regex("filename=\"([^\"]+)\"|filename=([^;]+)", RegexOption.IGNORE_CASE).find(value)?.let {
+        (it.groupValues[1].ifBlank { it.groupValues[2] }).trim().trim('"').substringAfterLast('/').substringAfterLast('\\')
+      }
+    }
     private fun DownloadRecord.heightValue(): Int = resolution?.filter { it.isDigit() }?.toIntOrNull() ?: 0
 
     private fun parseMasterPlaylist(text: String, base: String): List<HlsVariant> {
