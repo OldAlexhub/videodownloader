@@ -33,7 +33,8 @@ class PlayerActivity : AppCompatActivity() {
     setContentView(playerView)
     position = savedInstanceState?.getLong(STATE_POSITION) ?: 0L
     playWhenReady = savedInstanceState?.getBoolean(STATE_PLAYING) ?: true
-    Telemetry.record(this, "player_opened", JSONObject().apply { put("mediaType", intent.getStringExtra(EXTRA_MIME).orEmpty().substringBefore('/')) })
+    val mediaType = intent.getStringExtra(EXTRA_MIME).orEmpty().substringBefore('/').ifBlank { "unknown" }
+    Telemetry.record(this, "player_opened", JSONObject().apply { put("mediaType", mediaType) })
   }
 
   override fun onStart() {

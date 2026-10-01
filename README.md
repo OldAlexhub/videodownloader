@@ -123,16 +123,18 @@ Banners collapse after an error. Native ads are labeled Sponsored. Interstitials
 
 The analytics base URL is `https://vd.server.oldalexhub.com`. The app posts one JSON event at a time to `/v1/events` with a four-second connection and read timeout. A bounded local queue keeps at most 100 events. Failures never block browser, download, library, player, or ad flows.
 
+The production backend implementation is in the sibling [`server`](../server) repository. It includes the ingestion API, MongoDB event storage and retention indexes, local IP geolocation, authenticated reporting APIs, an admin dashboard, automated tests, Docker deployment files, and an Nginx configuration for `vd.server.oldalexhub.com`.
+
 Events can contain:
 
-- Random installation ID for approximate unique-user counts
+- Random installation ID for approximate unique-user counts. The server stores only its keyed HMAC hash.
 - Event time, app version, Android API level, locale, and time zone
 - Download title and filename as text
 - Source domain, never the full signed URL
 - Media type, actual source quality, bytes, result, duration, and failure code
 - Ad format and placement impression events
 
-The backend may derive approximate city and country from the request IP. The app does not request Android location permission. Media bytes, cookies, authorization headers, browsing history, full source URLs, and page content are never included in analytics. Users can disable Performance analytics in Settings, which clears the pending analytics queue.
+The backend may derive approximate city and country from the request IP and then discards the IP without storing it. The app does not request Android location permission. Media bytes, cookies, authorization headers, browsing history, full source URLs, and page content are never included in analytics. Users can disable Performance analytics in Settings, which clears the pending analytics queue.
 
 Expected event endpoint response: any HTTP 2xx status acknowledges the event. Other responses leave the event queued for a later app session.
 

@@ -34,6 +34,7 @@ object Telemetry {
     val appContext = context.applicationContext
     if (!isEnabled(appContext)) return
     val event = JSONObject().apply {
+      put("eventId", UUID.randomUUID().toString())
       put("event", type.take(80))
       put("installId", installId(appContext))
       put("occurredAt", System.currentTimeMillis())

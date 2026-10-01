@@ -45,7 +45,7 @@ Analytics events may include:
 - Ad format and placement impression events
 - Player-open and app-open events
 
-The analytics server may use the request IP address to derive an approximate city and country. The app does not request Android location permission for analytics and does not send GPS coordinates.
+The analytics server may use the request IP address to derive an approximate city and country, then discards the IP without storing it. The server replaces the random installation identifier with a keyed HMAC hash before database storage. The app does not request Android location permission for analytics and does not send GPS coordinates.
 
 The app does not send downloaded media files, video or audio content, WebView cookies, authorization headers, complete signed download URLs, full browsing history, or page content to the Old Alex Hub analytics service.
 
