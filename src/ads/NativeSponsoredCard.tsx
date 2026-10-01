@@ -11,11 +11,14 @@ import {
 import {adConfig} from '../config/ads';
 import {colors, radius, spacing} from '../theme';
 import {downloadManager} from '../native/DownloadManager';
+import {useAdsReady} from './AdConsentContext';
 
 export function NativeSponsoredCard() {
+  const adsReady = useAdsReady();
   const [nativeAd, setNativeAd] = useState<NativeAd | null>(null);
 
   useEffect(() => {
+    if (!adsReady) return;
     let mounted = true;
     let loadedAd: NativeAd | null = null;
     NativeAd.createForAdRequest(adConfig.native, {requestNonPersonalizedAdsOnly: false})
@@ -35,7 +38,7 @@ export function NativeSponsoredCard() {
       mounted = false;
       loadedAd?.destroy();
     };
-  }, []);
+  }, [adsReady]);
 
   if (!nativeAd) {
     return null;

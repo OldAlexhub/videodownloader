@@ -1,19 +1,20 @@
 {
   "name": "VideoDownloader",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
-    "test": "jest"
+    "test": "jest",
+    "typecheck": "tsc --noEmit",
+    "android:debug": "react-native run-android --mode debug",
+    "android:release": "cd .. && python release.py --skip-screenshots"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^3.1.1",
     "@react-native-clipboard/clipboard": "^1.16.3",
-    "@react-native-community/netinfo": "^12.0.1",
-    "@react-native/new-app-screen": "0.87.1",
     "lucide-react-native": "^1.49.0",
     "react": "19.2.3",
     "react-native": "0.87.1",

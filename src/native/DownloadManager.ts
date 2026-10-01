@@ -9,6 +9,7 @@ interface EnqueueOptions {
   destinationUri?: string;
   wifiOnly?: boolean;
   parallelDownloads?: number;
+  resumeAutomatically?: boolean;
 }
 
 interface NativeDownloadManagerShape {
@@ -32,6 +33,7 @@ interface NativeDownloadManagerShape {
   clearAllData(): Promise<boolean>;
   setAnalyticsEnabled(enabled: boolean): Promise<boolean>;
   trackEvent(name: string, properties: Record<string, string | number | boolean>): Promise<boolean>;
+  inspectManifest(sourceUrl: string, pageUrl: string, title: string): Promise<DetectedMedia[]>;
 }
 
 const nativeModule = NativeModules.VDDownloadManager as NativeDownloadManagerShape | undefined;
@@ -45,7 +47,7 @@ function requireNative(): NativeDownloadManagerShape {
 
 export const downloadManager = {
   list: () => requireNative().listDownloads(),
-  enqueue: ({media, cookie, userAgent, destinationUri, wifiOnly, parallelDownloads}: EnqueueOptions) => {
+  enqueue: ({media, cookie, userAgent, destinationUri, wifiOnly, parallelDownloads, resumeAutomatically}: EnqueueOptions) => {
     const suggested = media.qualityLabel && media.qualityLabel !== 'Source'
       ? `${media.title} - ${media.qualityLabel}`
       : media.title;
@@ -58,6 +60,7 @@ export const downloadManager = {
       destinationUri: destinationUri || '',
       wifiOnly: Boolean(wifiOnly),
       parallelDownloads: parallelDownloads || 2,
+      resumeAutomatically: resumeAutomatically !== false,
     });
   },
   pause: (id: string) => requireNative().pauseDownload(id),
@@ -78,4 +81,5 @@ export const downloadManager = {
   clearAllData: () => requireNative().clearAllData(),
   setAnalyticsEnabled: (enabled: boolean) => requireNative().setAnalyticsEnabled(enabled),
   trackEvent: (name: string, properties: Record<string, string | number | boolean> = {}) => requireNative().trackEvent(name, properties),
+  inspectManifest: (sourceUrl: string, pageUrl: string, title: string) => requireNative().inspectManifest(sourceUrl, pageUrl, title),
 };

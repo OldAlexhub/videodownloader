@@ -35,6 +35,7 @@ import {SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {colors, radius, spacing} from '../theme';
 import {inferMediaFromUrl, MEDIA_DETECTOR_SCRIPT, normalizeAddress} from '../utils/browser';
+import {downloadManager} from '../native/DownloadManager';
 
 interface BrowserTab {
   id: string;
@@ -123,7 +124,7 @@ export function BrowserScreen() {
       if (payload.meta?.contentLength) headers['content-length'] = payload.meta.contentLength;
       const found = inferMediaFromUrl(payload.url, active.url, payload.meta?.title || pageTitle, headers);
       if (found) {
-        addDetectedMedia({
+        const enriched = {
           ...found,
           width: Number(payload.meta?.width) || found.width,
           height: Number(payload.meta?.height) || found.height,
@@ -131,7 +132,15 @@ export function BrowserScreen() {
           qualityLabel: payload.meta?.height ? `${payload.meta.height}p` : found.qualityLabel,
           thumbnailUrl: payload.meta?.poster || undefined,
           confidence: found.confidence + (payload.meta?.active ? 20 : 0) + (payload.meta?.prominent ? 10 : 0),
-        });
+        };
+        if (found.isManifest) {
+          downloadManager.inspectManifest(found.sourceUrl, active.url, enriched.title)
+            .then(items => items.forEach(addDetectedMedia))
+            .catch(error => {
+              if (String(error).includes('Protected')) addDetectedMedia({...enriched, isProtected: true});
+              else addDetectedMedia(enriched);
+            });
+        } else addDetectedMedia(enriched);
       }
     } catch {
       return;

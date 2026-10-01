@@ -4,9 +4,12 @@ import {BannerAd, BannerAdSize} from 'react-native-google-mobile-ads';
 import {adConfig} from '../config/ads';
 import {colors} from '../theme';
 import {downloadManager} from '../native/DownloadManager';
+import {useAdsReady} from './AdConsentContext';
 
 export function SafeAdContainer() {
+  const adsReady = useAdsReady();
   const [visible, setVisible] = useState(false);
+  if (!adsReady) return null;
   return (
     <View style={visible ? styles.loaded : styles.collapsed} pointerEvents={visible ? 'auto' : 'none'}>
       <BannerAd

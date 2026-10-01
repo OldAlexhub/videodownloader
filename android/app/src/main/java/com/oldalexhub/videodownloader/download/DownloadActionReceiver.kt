@@ -9,7 +9,7 @@ class DownloadActionReceiver : BroadcastReceiver() {
     val id = intent.getStringExtra(EXTRA_ID) ?: return
     when (intent.action) {
       ACTION_PAUSE -> DownloadScheduler.pause(context, id)
-      ACTION_RESUME -> DownloadScheduler.enqueue(context, id, false)
+      ACTION_RESUME -> DownloadScheduler.enqueue(context, id, DownloadDatabase.get(context).get(id)?.wifiOnly ?: false)
       ACTION_CANCEL -> DownloadScheduler.cancel(context, id)
     }
   }

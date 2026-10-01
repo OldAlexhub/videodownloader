@@ -92,7 +92,9 @@ export function AppProvider({children}: PropsWithChildren) {
       AsyncStorage.getItem(STORAGE.history),
       AsyncStorage.getItem(STORAGE.bookmarks),
     ]).then(([storedSettings, storedHistory, storedBookmarks]) => {
-      setSettings({...DEFAULT_SETTINGS, ...parseStored(storedSettings, {})});
+      const restoredSettings = {...DEFAULT_SETTINGS, ...parseStored(storedSettings, {})};
+      setSettings(restoredSettings);
+      downloadManager.setAnalyticsEnabled(restoredSettings.analyticsEnabled).catch(() => undefined);
       setHistory(parseStored(storedHistory, []));
       setBookmarks(parseStored(storedBookmarks, []));
     });
@@ -107,6 +109,14 @@ export function AppProvider({children}: PropsWithChildren) {
 
   useEffect(() => {
     const timer = setInterval(refreshDownloads, 1200);
+    const shareTimer = setInterval(() => {
+      downloadManager.initialSharedUrl().then(url => {
+        if (url) {
+          setBrowserTarget(`${url}#shared=${Date.now()}`);
+          setActiveTab('browser');
+        }
+      }).catch(() => undefined);
+    }, 1200);
     const subscription = AppState.addEventListener('change', state => {
       if (state === 'active') {
         refreshDownloads();
@@ -114,6 +124,7 @@ export function AppProvider({children}: PropsWithChildren) {
     });
     return () => {
       clearInterval(timer);
+      clearInterval(shareTimer);
       subscription.remove();
     };
   }, [refreshDownloads]);
@@ -203,7 +214,7 @@ export function AppProvider({children}: PropsWithChildren) {
             {text: 'Cancel', style: 'cancel', onPress: () => resolve()},
             {text: 'Open existing', onPress: () => { downloadManager.open(duplicate.id); resolve(); }},
             {text: 'Download another copy', onPress: async () => {
-              await downloadManager.enqueue({media: item, cookie, userAgent, destinationUri: settings.destinationUri, wifiOnly: settings.wifiOnly, parallelDownloads: settings.parallelDownloads});
+              await downloadManager.enqueue({media: item, cookie, userAgent, destinationUri: settings.destinationUri, wifiOnly: settings.wifiOnly, parallelDownloads: settings.parallelDownloads, resumeAutomatically: settings.resumeAutomatically});
               await refreshDownloads();
               resolve();
             }},
@@ -218,6 +229,7 @@ export function AppProvider({children}: PropsWithChildren) {
       destinationUri: settings.destinationUri,
       wifiOnly: settings.wifiOnly,
       parallelDownloads: settings.parallelDownloads,
+      resumeAutomatically: settings.resumeAutomatically,
     });
     await refreshDownloads();
     setActiveTab('downloads');

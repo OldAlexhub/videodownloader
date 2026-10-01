@@ -29,6 +29,9 @@ import com.oldalexhub.videodownloader.download.DownloadWorker
 import com.oldalexhub.videodownloader.player.PlayerActivity
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URL
 import java.util.UUID
 
 class VDDownloadManagerModule(private val context: ReactApplicationContext) :
@@ -92,6 +95,8 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         }.toString())
         put("headers_json", headers.toString())
         put("destination_uri", payload.optionalString("destinationUri"))
+        put("wifi_only", if (payload.boolean("wifiOnly")) 1 else 0)
+        put("auto_resume", if (payload.boolean("resumeAutomatically")) 1 else 0)
       })
       val maxParallel = payload.int("parallelDownloads", 2).coerceIn(1, 4)
       context.getSharedPreferences("download_settings", 0).edit().putInt("max_parallel", maxParallel).apply()
@@ -123,7 +128,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         throw IllegalStateException("This server does not support resumable downloads. Restart confirmation is required.")
       }
       database.update(id, ContentValues().apply { put("status", "queued"); putNull("failure_message"); putNull("failure_code") })
-      DownloadScheduler.enqueue(context, id, false)
+      DownloadScheduler.enqueue(context, id, record.wifiOnly)
       true
     }.fold(promise::resolve) { error -> promise.reject("E_RESTART_REQUIRED", error.message, error) }
   }
@@ -137,7 +142,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         put("status", "queued"); put("downloaded_bytes", 0); put("progress", 0); put("supports_range", -1)
         putNull("failure_message"); putNull("failure_code"); putNull("etag"); putNull("last_modified")
       })
-      DownloadScheduler.enqueue(context, id, false)
+      DownloadScheduler.enqueue(context, id, database.get(id)?.wifiOnly ?: false)
       true
     }.fold(promise::resolve) { error -> promise.reject("E_RESTART", error.message, error) }
   }
@@ -228,7 +233,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
 
   @ReactMethod
   fun chooseDestination(promise: Promise) {
-    val activity = currentActivity ?: return promise.reject("E_ACTIVITY", "No Android activity is available")
+    val activity = context.currentActivity ?: return promise.reject("E_ACTIVITY", "No Android activity is available")
     if (folderPromise != null) return promise.reject("E_PICKER", "A folder picker is already open")
     folderPromise = promise
     activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -271,6 +276,59 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
   @ReactMethod
   fun getInitialSharedUrl(promise: Promise) {
     promise.resolve(MainActivity.consumeSharedUrl())
+  }
+
+  @ReactMethod
+  fun inspectManifest(sourceUrl: String, pageUrl: String, title: String, promise: Promise) {
+    Thread {
+      runCatching {
+        val connection = URL(sourceUrl).openConnection() as HttpURLConnection
+        connection.instanceFollowRedirects = true
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 10_000
+        connection.setRequestProperty("Accept-Encoding", "identity")
+        connection.setRequestProperty("Referer", pageUrl)
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36 VDMediaSaver/1.0")
+        CookieManager.getInstance().getCookie(sourceUrl)?.let { connection.setRequestProperty("Cookie", it) }
+        if (connection.responseCode !in 200..299) error("The media manifest could not be loaded")
+        val text = connection.inputStream.bufferedReader().use { it.readText() }
+        connection.disconnect()
+        if (text.contains("ContentProtection", true) || (text.contains("#EXT-X-KEY", true) && !text.contains("METHOD=NONE", true))) {
+          throw IllegalStateException("Protected media cannot be downloaded.")
+        }
+        val results = Arguments.createArray()
+        if (sourceUrl.substringBefore('?').endsWith(".m3u8", true) || text.contains("#EXTM3U")) {
+          val lines = text.lines().map { it.trim() }
+          lines.forEachIndexed { index, line ->
+            if (line.startsWith("#EXT-X-STREAM-INF", true)) {
+              val attrs = line.substringAfter(':')
+              val bandwidth = Regex("BANDWIDTH=(\\d+)", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1)?.toLongOrNull() ?: 0
+              val resolution = Regex("RESOLUTION=(\\d+)x(\\d+)", RegexOption.IGNORE_CASE).find(attrs)
+              val width = resolution?.groupValues?.get(1)?.toIntOrNull() ?: 0
+              val height = resolution?.groupValues?.get(2)?.toIntOrNull() ?: 0
+              val path = lines.drop(index + 1).firstOrNull { it.isNotBlank() && !it.startsWith('#') } ?: return@forEachIndexed
+              results.pushMap(manifestMap(URI(sourceUrl).resolve(path).toString(), pageUrl, title, "application/vnd.apple.mpegurl", "m3u8", width, height, bandwidth))
+            }
+          }
+          if (results.size() == 0) results.pushMap(manifestMap(sourceUrl, pageUrl, title, "application/vnd.apple.mpegurl", "m3u8", 0, 0, 0))
+        } else {
+          val representation = Regex("<Representation\\b([^>]*)>(.*?)</Representation>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+          representation.findAll(text).forEach { match ->
+            val attrs = match.groupValues[1]
+            val body = match.groupValues[2]
+            val height = Regex("height=\"(\\d+)\"", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val width = Regex("width=\"(\\d+)\"", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val bandwidth = Regex("bandwidth=\"(\\d+)\"", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1)?.toLongOrNull() ?: 0
+            val mime = Regex("mimeType=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1) ?: "video/mp4"
+            val base = Regex("<BaseURL[^>]*>([^<]+)</BaseURL>", RegexOption.IGNORE_CASE).find(body)?.groupValues?.get(1)?.trim()
+            val url = if (base != null && !text.contains("SegmentTemplate", true) && !text.contains("SegmentList", true)) URI(sourceUrl).resolve(base).toString() else sourceUrl
+            results.pushMap(manifestMap(url, pageUrl, title, if (url == sourceUrl) "application/dash+xml" else mime, if (url == sourceUrl) "mpd" else mime.substringAfter('/', "mp4").substringBefore('+'), width, height, bandwidth))
+          }
+          if (results.size() == 0) results.pushMap(manifestMap(sourceUrl, pageUrl, title, "application/dash+xml", "mpd", 0, 0, 0))
+        }
+        results
+      }.fold(promise::resolve) { error -> promise.reject(if (error.message?.contains("Protected") == true) "E_PROTECTED" else "E_MANIFEST", error.message, error) }
+    }.start()
   }
 
   @ReactMethod
@@ -325,7 +383,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
 
   private fun requestNotificationPermission() {
     if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-      currentActivity?.let { ActivityCompat.requestPermissions(it, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4102) }
+      context.currentActivity?.let { activity: Activity -> ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4102) }
     }
   }
 
@@ -335,6 +393,18 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
       .replace(Regex("[<>:\"/\\\\|?*\\u0000-\\u001F]"), " ")
       .replace(Regex("\\s+"), " ")
       .trim().trimEnd('.', ' ').take(160).ifBlank { "download.bin" }
+
+    private fun manifestMap(url: String, pageUrl: String, title: String, mime: String, extension: String, width: Int, height: Int, bandwidth: Long): WritableMap = Arguments.createMap().apply {
+      putString("id", "$url|$height")
+      putString("groupKey", "${runCatching { Uri.parse(pageUrl).host }.getOrNull()}|${title.lowercase()}|video")
+      putString("sourceUrl", url); putString("pageUrl", pageUrl); putString("title", title)
+      putString("mimeType", mime); putString("extension", extension); putString("mediaType", "video")
+      putString("qualityLabel", if (height > 0) "${height}p" else "Adaptive stream")
+      if (height > 0) { putString("resolution", "${height}p"); putInt("height", height); putInt("width", width) }
+      putDouble("estimatedBytes", 0.0); putBoolean("hasAudio", true); putBoolean("isManifest", extension == "m3u8" || extension == "mpd")
+      putBoolean("isProtected", false); putDouble("confidence", if (height > 0) 96.0 else 86.0)
+      if (bandwidth > 0) putString("videoCodec", "${bandwidth / 1000} kbps")
+    }
   }
 }
 

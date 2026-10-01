@@ -18,6 +18,8 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
+import com.oldalexhub.videodownloader.Telemetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -82,6 +84,16 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
         put("completed_at", System.currentTimeMillis())
         put("content_hash", hash)
       })
+      val finished = database.get(id) ?: current
+      Telemetry.record(applicationContext, "download_completed", JSONObject().apply {
+        put("title", finished.title)
+        put("filename", finished.finalFilename)
+        put("sourceHost", runCatching { Uri.parse(finished.sourceUrl).host }.getOrNull())
+        put("mediaType", finished.mediaType)
+        put("quality", finished.qualityLabel.orEmpty())
+        put("bytes", resultFile.length())
+        put("durationMs", System.currentTimeMillis() - (finished.startedAt ?: finished.createdAt))
+      })
       resultFile.delete()
       stateFile(applicationContext, id).delete()
       showCompleted(database.get(id) ?: current)
@@ -94,7 +106,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
     } catch (error: IOException) {
       val current = database.get(id)
       val retries = (current?.retryCount ?: 0) + 1
-      if (!isStopped && retries <= 3 && current?.status != "paused" && current?.status != "cancelled") {
+      if (!isStopped && retries <= 3 && current?.autoResume != false && current?.status != "paused" && current?.status != "cancelled") {
         database.update(id, ContentValues().apply {
           put("status", "retrying")
           put("retry_count", retries)
@@ -428,6 +440,18 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       put("speed_bps", 0)
       put("eta_seconds", 0)
     })
+    database.get(id)?.let { record ->
+      Telemetry.record(applicationContext, "download_failed", JSONObject().apply {
+        put("title", record.title)
+        put("filename", record.finalFilename)
+        put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
+        put("mediaType", record.mediaType)
+        put("quality", record.qualityLabel.orEmpty())
+        put("failureCode", code)
+        put("downloadedBytes", record.downloadedBytes)
+        put("durationMs", System.currentTimeMillis() - (record.startedAt ?: record.createdAt))
+      })
+    }
     notificationManager.cancel(notificationId(id))
   }
 

@@ -6,6 +6,7 @@ import type {TabKey} from '../types';
 import {colors} from '../theme';
 import {useApp} from '../context/AppContext';
 import {SafeAdContainer} from '../ads/SafeAdContainer';
+import {interstitialController} from '../ads/interstitial';
 
 const tabs: Array<{key: TabKey; label: string; icon: (color: string) => ReactNode}> = [
   {key: 'browser', label: 'Browser', icon: color => <Globe2 color={color} size={21} />},
@@ -16,7 +17,7 @@ const tabs: Array<{key: TabKey; label: string; icon: (color: string) => ReactNod
 ];
 
 export function AppShell({children}: PropsWithChildren) {
-  const {activeTab, setActiveTab} = useApp();
+  const {activeTab, setActiveTab, downloads} = useApp();
   const insets = useSafeAreaInsets();
   const showBanner = activeTab !== 'browser';
   return (
@@ -32,7 +33,13 @@ export function AppShell({children}: PropsWithChildren) {
               accessibilityRole="tab"
               accessibilityState={{selected: active}}
               key={tab.key}
-              onPress={() => setActiveTab(tab.key)}
+              onPress={() => {
+                const naturalBreak = activeTab !== tab.key && (activeTab === 'downloads' || activeTab === 'library');
+                if (naturalBreak) {
+                  const completed = downloads.filter(item => item.status === 'completed').length;
+                  interstitialController.naturalBreak(completed >= 2).finally(() => setActiveTab(tab.key));
+                } else setActiveTab(tab.key);
+              }}
               style={styles.tab}>
               <View style={[styles.iconWrap, active && styles.activeIcon]}>{tab.icon(tint)}</View>
               <Text numberOfLines={1} style={[styles.tabLabel, {color: tint}]}>{tab.label}</Text>

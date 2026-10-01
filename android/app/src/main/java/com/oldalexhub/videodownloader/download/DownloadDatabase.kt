@@ -47,6 +47,8 @@ class DownloadDatabase private constructor(context: Context) :
         destination_uri TEXT,
         content_hash TEXT,
         work_id TEXT
+        ,wifi_only INTEGER NOT NULL DEFAULT 0
+        ,auto_resume INTEGER NOT NULL DEFAULT 1
       )
       """.trimIndent(),
     )
@@ -58,6 +60,10 @@ class DownloadDatabase private constructor(context: Context) :
   override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
     if (oldVersion < 2) {
       db.execSQL("ALTER TABLE downloads ADD COLUMN work_id TEXT")
+    }
+    if (oldVersion < 3) {
+      db.execSQL("ALTER TABLE downloads ADD COLUMN wifi_only INTEGER NOT NULL DEFAULT 0")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN auto_resume INTEGER NOT NULL DEFAULT 1")
     }
   }
 
@@ -99,7 +105,7 @@ class DownloadDatabase private constructor(context: Context) :
   ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L }
 
   companion object {
-    private const val VERSION = 2
+    private const val VERSION = 3
     @Volatile private var instance: DownloadDatabase? = null
 
     fun get(context: Context): DownloadDatabase = instance ?: synchronized(this) {
@@ -143,6 +149,8 @@ data class DownloadRecord(
   val destinationUri: String?,
   val contentHash: String?,
   val workId: String?,
+  val wifiOnly: Boolean,
+  val autoResume: Boolean,
 ) {
   companion object {
     fun from(cursor: Cursor): DownloadRecord {
@@ -189,6 +197,8 @@ data class DownloadRecord(
         destinationUri = text("destination_uri"),
         contentHash = text("content_hash"),
         workId = text("work_id"),
+        wifiOnly = cursor.getInt(cursor.getColumnIndexOrThrow("wifi_only")) == 1,
+        autoResume = cursor.getInt(cursor.getColumnIndexOrThrow("auto_resume")) == 1,
       )
     }
   }

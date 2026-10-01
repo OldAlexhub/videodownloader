@@ -1,4 +1,4 @@
-import React, {useEffect} from 'react';
+import React, {useEffect, useState} from 'react';
 import {StatusBar} from 'react-native';
 import mobileAds, {AdsConsent} from 'react-native-google-mobile-ads';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
@@ -11,6 +11,8 @@ import {SettingsScreen} from './src/screens/SettingsScreen';
 import {SmartToolsScreen} from './src/screens/SmartToolsScreen';
 import {colors} from './src/theme';
 import {downloadManager} from './src/native/DownloadManager';
+import {interstitialController} from './src/ads/interstitial';
+import {AdConsentProvider} from './src/ads/AdConsentContext';
 
 function CurrentScreen() {
   const {activeTab} = useApp();
@@ -22,13 +24,17 @@ function CurrentScreen() {
 }
 
 function App() {
+  const [adsReady, setAdsReady] = useState(false);
   useEffect(() => {
     let mounted = true;
     AdsConsent.gatherConsent()
       .catch(() => AdsConsent.getConsentInfo())
       .then(info => {
         if (mounted && info.canRequestAds) {
-          return mobileAds().initialize();
+          return mobileAds().initialize().then(() => {
+            setAdsReady(true);
+            return interstitialController.initialize();
+          });
         }
       })
       .catch(() => undefined);
@@ -40,9 +46,11 @@ function App() {
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" />
       <AppProvider>
-        <AppShell>
-          <CurrentScreen />
-        </AppShell>
+        <AdConsentProvider ready={adsReady}>
+          <AppShell>
+            <CurrentScreen />
+          </AppShell>
+        </AdConsentProvider>
       </AppProvider>
     </SafeAreaProvider>
   );
