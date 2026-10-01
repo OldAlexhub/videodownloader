@@ -6,9 +6,11 @@ import {
   NativeAsset,
   NativeAssetType,
   NativeMediaView,
+  NativeAdEventType,
 } from 'react-native-google-mobile-ads';
 import {adConfig} from '../config/ads';
 import {colors, radius, spacing} from '../theme';
+import {downloadManager} from '../native/DownloadManager';
 
 export function NativeSponsoredCard() {
   const [nativeAd, setNativeAd] = useState<NativeAd | null>(null);
@@ -19,6 +21,9 @@ export function NativeSponsoredCard() {
     NativeAd.createForAdRequest(adConfig.native, {requestNonPersonalizedAdsOnly: false})
       .then(ad => {
         loadedAd = ad;
+        ad.addAdEventListener(NativeAdEventType.IMPRESSION, () => {
+          downloadManager.trackEvent('ad_impression', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
+        });
         if (mounted) {
           setNativeAd(ad);
         } else {

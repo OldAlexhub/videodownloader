@@ -89,12 +89,14 @@ export interface AppSettings {
   parallelDownloads: 1 | 2 | 3 | 4;
   wifiOnly: boolean;
   resumeAutomatically: boolean;
+  keepScreenAwake: boolean;
   smartFilename: boolean;
   duplicateDetection: boolean;
   searchEngine: 'google' | 'bing' | 'duckduckgo';
   privateByDefault: boolean;
   destinationName: string;
   destinationUri?: string;
+  analyticsEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -102,9 +104,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   parallelDownloads: 2,
   wifiOnly: false,
   resumeAutomatically: true,
+  keepScreenAwake: false,
   smartFilename: true,
   duplicateDetection: true,
   searchEngine: 'google',
   privateByDefault: false,
   destinationName: 'Video Downloader & Media Saver',
+  analyticsEnabled: true,
 };

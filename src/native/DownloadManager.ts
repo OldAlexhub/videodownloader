@@ -8,6 +8,7 @@ interface EnqueueOptions {
   userAgent?: string;
   destinationUri?: string;
   wifiOnly?: boolean;
+  parallelDownloads?: number;
 }
 
 interface NativeDownloadManagerShape {
@@ -15,16 +16,22 @@ interface NativeDownloadManagerShape {
   enqueueDownload(payload: Record<string, unknown>): Promise<string>;
   pauseDownload(id: string): Promise<boolean>;
   resumeDownload(id: string): Promise<boolean>;
+  restartDownload(id: string): Promise<boolean>;
   cancelDownload(id: string): Promise<boolean>;
   deleteDownload(id: string, deleteFile: boolean): Promise<boolean>;
   renameDownload(id: string, name: string): Promise<string>;
   openDownload(id: string): Promise<boolean>;
   shareDownload(id: string): Promise<boolean>;
+  moveDownload(id: string, destinationUri: string): Promise<string>;
   chooseDestination(): Promise<{uri: string; name: string}>;
   clearCompleted(): Promise<number>;
   clearTemporaryFiles(): Promise<number>;
   getStorageStats(): Promise<{videos: number; audio: number; images: number; temporary: number}>;
   getInitialSharedUrl(): Promise<string | null>;
+  clearBrowserData(kind: string): Promise<boolean>;
+  clearAllData(): Promise<boolean>;
+  setAnalyticsEnabled(enabled: boolean): Promise<boolean>;
+  trackEvent(name: string, properties: Record<string, string | number | boolean>): Promise<boolean>;
 }
 
 const nativeModule = NativeModules.VDDownloadManager as NativeDownloadManagerShape | undefined;
@@ -38,7 +45,7 @@ function requireNative(): NativeDownloadManagerShape {
 
 export const downloadManager = {
   list: () => requireNative().listDownloads(),
-  enqueue: ({media, cookie, userAgent, destinationUri, wifiOnly}: EnqueueOptions) => {
+  enqueue: ({media, cookie, userAgent, destinationUri, wifiOnly, parallelDownloads}: EnqueueOptions) => {
     const suggested = media.qualityLabel && media.qualityLabel !== 'Source'
       ? `${media.title} - ${media.qualityLabel}`
       : media.title;
@@ -50,18 +57,25 @@ export const downloadManager = {
       referer: media.pageUrl,
       destinationUri: destinationUri || '',
       wifiOnly: Boolean(wifiOnly),
+      parallelDownloads: parallelDownloads || 2,
     });
   },
   pause: (id: string) => requireNative().pauseDownload(id),
   resume: (id: string) => requireNative().resumeDownload(id),
+  restart: (id: string) => requireNative().restartDownload(id),
   cancel: (id: string) => requireNative().cancelDownload(id),
   remove: (id: string, deleteFile = false) => requireNative().deleteDownload(id, deleteFile),
   rename: (id: string, name: string) => requireNative().renameDownload(id, name),
   open: (id: string) => requireNative().openDownload(id),
   share: (id: string) => requireNative().shareDownload(id),
+  move: (id: string, destinationUri: string) => requireNative().moveDownload(id, destinationUri),
   chooseDestination: () => requireNative().chooseDestination(),
   clearCompleted: () => requireNative().clearCompleted(),
   clearTemporaryFiles: () => requireNative().clearTemporaryFiles(),
   storageStats: () => requireNative().getStorageStats(),
   initialSharedUrl: () => requireNative().getInitialSharedUrl(),
+  clearBrowserData: (kind: 'cookies' | 'cache' | 'all') => requireNative().clearBrowserData(kind),
+  clearAllData: () => requireNative().clearAllData(),
+  setAnalyticsEnabled: (enabled: boolean) => requireNative().setAnalyticsEnabled(enabled),
+  trackEvent: (name: string, properties: Record<string, string | number | boolean> = {}) => requireNative().trackEvent(name, properties),
 };

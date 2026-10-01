@@ -3,6 +3,7 @@ import {StyleSheet, View} from 'react-native';
 import {BannerAd, BannerAdSize} from 'react-native-google-mobile-ads';
 import {adConfig} from '../config/ads';
 import {colors} from '../theme';
+import {downloadManager} from '../native/DownloadManager';
 
 export function SafeAdContainer() {
   const [visible, setVisible] = useState(false);
@@ -13,6 +14,7 @@ export function SafeAdContainer() {
         size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
         requestOptions={{requestNonPersonalizedAdsOnly: false}}
         onAdLoaded={() => setVisible(true)}
+        onAdImpression={() => downloadManager.trackEvent('ad_impression', {format: 'banner', placement: 'bottom_bar'}).catch(() => undefined)}
         onAdFailedToLoad={() => setVisible(false)}
       />
     </View>

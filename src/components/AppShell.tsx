@@ -1,6 +1,6 @@
 import React, {PropsWithChildren, ReactNode} from 'react';
 import {Pressable, StyleSheet, Text, View} from 'react-native';
-import {Bookmark, Bot, Download, Globe2, Library} from 'lucide-react-native';
+import {Bot, Download, Globe2, Library, Settings} from 'lucide-react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import type {TabKey} from '../types';
 import {colors} from '../theme';
@@ -12,7 +12,7 @@ const tabs: Array<{key: TabKey; label: string; icon: (color: string) => ReactNod
   {key: 'downloads', label: 'Downloads', icon: color => <Download color={color} size={21} />},
   {key: 'library', label: 'Library', icon: color => <Library color={color} size={21} />},
   {key: 'tools', label: 'Tools', icon: color => <Bot color={color} size={21} />},
-  {key: 'settings', label: 'Settings', icon: color => <Bookmark color={color} size={21} />},
+  {key: 'settings', label: 'Settings', icon: color => <Settings color={color} size={21} />},
 ];
 
 export function AppShell({children}: PropsWithChildren) {

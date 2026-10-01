@@ -203,7 +203,7 @@ export function AppProvider({children}: PropsWithChildren) {
             {text: 'Cancel', style: 'cancel', onPress: () => resolve()},
             {text: 'Open existing', onPress: () => { downloadManager.open(duplicate.id); resolve(); }},
             {text: 'Download another copy', onPress: async () => {
-              await downloadManager.enqueue({media: item, cookie, userAgent, destinationUri: settings.destinationUri, wifiOnly: settings.wifiOnly});
+              await downloadManager.enqueue({media: item, cookie, userAgent, destinationUri: settings.destinationUri, wifiOnly: settings.wifiOnly, parallelDownloads: settings.parallelDownloads});
               await refreshDownloads();
               resolve();
             }},
@@ -217,6 +217,7 @@ export function AppProvider({children}: PropsWithChildren) {
       userAgent,
       destinationUri: settings.destinationUri,
       wifiOnly: settings.wifiOnly,
+      parallelDownloads: settings.parallelDownloads,
     });
     await refreshDownloads();
     setActiveTab('downloads');

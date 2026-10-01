@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">VideoDownloader</string>
+    <string name="app_name">Video Downloader &amp; Media Saver</string>
+    <string name="download_channel_name">Downloads</string>
 </resources>

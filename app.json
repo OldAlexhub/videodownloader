@@ -1,4 +1,7 @@
 {
   "name": "VideoDownloader",
-  "displayName": "VideoDownloader"
+  "displayName": "Video Downloader & Media Saver",
+  "react-native-google-mobile-ads": {
+    "android_app_id": "ca-app-pub-7831002909037560~8100766073"
+  }
 }

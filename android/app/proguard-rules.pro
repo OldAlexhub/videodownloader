@@ -8,3 +8,9 @@
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
 # Add any project specific keep options here:
+# React Native Google Mobile Ads, Media3, WorkManager, and native bridge models.
+-keep class com.oldalexhub.videodownloader.VDDownloadManagerModule { *; }
+-keep class com.oldalexhub.videodownloader.VDDownloadManagerPackage { *; }
+-keep class com.google.android.gms.ads.** { *; }
+-keep class com.google.android.ump.** { *; }
+-dontwarn org.conscrypt.**
