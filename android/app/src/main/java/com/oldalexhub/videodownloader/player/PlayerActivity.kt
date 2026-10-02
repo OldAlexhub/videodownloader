@@ -4,6 +4,10 @@ import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -19,10 +23,13 @@ class PlayerActivity : AppCompatActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    WindowCompat.setDecorFitsSystemWindows(window, false)
+    hideSystemBars()
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     playerView = PlayerView(this).apply {
       useController = true
       controllerAutoShow = true
+      setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
       setShowSubtitleButton(true)
       setShowFastForwardButton(true)
       setShowRewindButton(true)
@@ -35,6 +42,18 @@ class PlayerActivity : AppCompatActivity() {
     playWhenReady = savedInstanceState?.getBoolean(STATE_PLAYING) ?: true
     val mediaType = intent.getStringExtra(EXTRA_MIME).orEmpty().substringBefore('/').ifBlank { "unknown" }
     Telemetry.record(this, "player_opened", JSONObject().apply { put("mediaType", mediaType) })
+  }
+
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus) hideSystemBars()
+  }
+
+  private fun hideSystemBars() {
+    WindowInsetsControllerCompat(window, window.decorView).apply {
+      systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+      hide(WindowInsetsCompat.Type.systemBars())
+    }
   }
 
   override fun onStart() {
@@ -56,7 +75,10 @@ class PlayerActivity : AppCompatActivity() {
   private fun initializePlayer() {
     if (player != null) return
     val uri = intent.getStringExtra(EXTRA_URI) ?: return finish()
-    player = ExoPlayer.Builder(this).build().also { exoPlayer ->
+    player = ExoPlayer.Builder(this)
+      .setWakeMode(C.WAKE_MODE_LOCAL)
+      .setHandleAudioBecomingNoisy(true)
+      .build().also { exoPlayer ->
       playerView.player = exoPlayer
       exoPlayer.setMediaItem(MediaItem.fromUri(uri))
       exoPlayer.seekTo(position)

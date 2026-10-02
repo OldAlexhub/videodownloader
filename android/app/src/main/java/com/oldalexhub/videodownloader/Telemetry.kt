@@ -17,6 +17,7 @@ object Telemetry {
   private const val PREFS = "privacy_settings"
   private const val QUEUE = "analytics_queue"
   private const val ENABLED = "analytics_enabled"
+  private const val USAGE_INSIGHTS_ENABLED = "usage_insights_enabled"
   private const val INSTALL_ID = "install_id"
   private const val MAX_QUEUE = 100
   private val executor = Executors.newSingleThreadExecutor()
@@ -29,6 +30,22 @@ object Telemetry {
 
   fun isEnabled(context: Context): Boolean =
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(ENABLED, true)
+
+  fun setUsageInsightsEnabled(context: Context, enabled: Boolean) {
+    val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    preferences.edit().putBoolean(USAGE_INSIGHTS_ENABLED, enabled).apply()
+    if (!enabled) synchronized(lock) {
+      val queue = readQueue(context)
+      for (index in queue.length() - 1 downTo 0) {
+        val eventName = queue.optJSONObject(index)?.optString("event")
+        if (eventName != null && eventName in USAGE_INSIGHT_EVENTS) queue.remove(index)
+      }
+      saveQueue(context, queue)
+    }
+  }
+
+  fun isUsageInsightsEnabled(context: Context): Boolean =
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(USAGE_INSIGHTS_ENABLED, false)
 
   fun record(context: Context, type: String, properties: JSONObject = JSONObject()) {
     val appContext = context.applicationContext
@@ -52,6 +69,11 @@ object Telemetry {
       saveQueue(appContext, queue)
     }
     executor.execute { flush(appContext) }
+  }
+
+  fun recordUsageInsight(context: Context, type: String, properties: JSONObject) {
+    if (type !in USAGE_INSIGHT_EVENTS || !isEnabled(context) || !isUsageInsightsEnabled(context)) return
+    record(context, type, properties)
   }
 
   fun flush(context: Context) {
@@ -114,4 +136,6 @@ object Telemetry {
   private fun saveQueue(context: Context, queue: JSONArray) {
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(QUEUE, queue.toString()).apply()
   }
+
+  private val USAGE_INSIGHT_EVENTS = setOf("search_performed", "site_visited")
 }

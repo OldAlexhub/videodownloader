@@ -377,6 +377,12 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun setUsageInsightsEnabled(enabled: Boolean, promise: Promise) {
+    Telemetry.setUsageInsightsEnabled(context, enabled)
+    promise.resolve(true)
+  }
+
+  @ReactMethod
   fun setKeepScreenAwake(enabled: Boolean, promise: Promise) {
     val activity = context.currentActivity ?: return promise.resolve(false)
     activity.runOnUiThread {
@@ -392,6 +398,19 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
     properties.toHashMap().forEach { (key, value) -> if (value is String || value is Number || value is Boolean) json.put(key, value) }
     Telemetry.record(context, name, json)
     promise.resolve(true)
+  }
+
+  @ReactMethod
+  fun trackUsageInsight(name: String, properties: ReadableMap, promise: Promise) {
+    val json = when (name) {
+      "search_performed" -> properties.getString("term")?.trim()?.take(80)
+        ?.takeIf { it.isNotBlank() }?.let { JSONObject().put("term", it) }
+      "site_visited" -> properties.getString("siteHost")?.trim()?.lowercase()?.take(253)
+        ?.takeIf { it.matches(Regex("^[a-z0-9.:[\\]-]+$")) }?.let { JSONObject().put("siteHost", it) }
+      else -> null
+    }
+    if (json != null) Telemetry.recordUsageInsight(context, name, json)
+    promise.resolve(json != null)
   }
 
   override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {

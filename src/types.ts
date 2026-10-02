@@ -98,6 +98,7 @@ export interface AppSettings {
   destinationName: string;
   destinationUri?: string;
   analyticsEnabled: boolean;
+  usageInsightsEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -112,4 +113,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   privateByDefault: false,
   destinationName: 'Video Downloader & Media Saver',
   analyticsEnabled: true,
+  usageInsightsEnabled: false,
 };

@@ -13,6 +13,7 @@ Potentially collected:
 - Files and docs metadata: download title and filename as text, media type, quality, and byte counts
 - Diagnostics and performance: duration, outcome, failure code, Android API level, and app version
 - Approximate location: city and country may be derived by the server from the request IP
+- Search & website insights (optional, off by default): submitted browser search terms and visited website domains, only when the user enables this separate setting; private sessions are excluded
 
 Purposes:
 
@@ -23,6 +24,8 @@ Purposes:
 User control:
 
 - Performance analytics can be disabled in Settings.
+- Search & website insights is off by default, has a separate Settings switch, and is used for aggregate top-term and top-site reports.
+- Disabling Search & website insights removes queued search and site events from the device.
 - Disabling analytics clears the pending local analytics queue.
 - Core functionality does not depend on analytics availability.
 
@@ -31,7 +34,7 @@ Not sent to Old Alex Hub analytics:
 - Downloaded media bytes or media content
 - Cookies or authorization headers
 - Full source URLs or signed URL query strings
-- Browser history
+- Full browser history, visited page paths, and page URL query strings
 - Contacts, microphone, camera, precise location, messages, or financial information
 
 ## Google AdMob and UMP

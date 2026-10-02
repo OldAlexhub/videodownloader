@@ -318,6 +318,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
     repeat(MAX_REDIRECTS + 1) { redirectCount ->
       val connection = URL(current).openConnection() as HttpURLConnection
       connection.instanceFollowRedirects = false
+      connection.useCaches = false
       connection.connectTimeout = 20_000
       connection.readTimeout = 30_000
       connection.requestMethod = method
@@ -533,7 +534,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
   private class DownloadFailure(val code: String, message: String) : RuntimeException(message)
 
   companion object {
-    private const val BUFFER_SIZE = 128 * 1024
+    private const val BUFFER_SIZE = 512 * 1024
     private const val MAX_REDIRECTS = 8
     private const val CHANNEL_ID = "media_downloads"
     private val slotLock = Any()

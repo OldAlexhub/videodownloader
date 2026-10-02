@@ -95,6 +95,7 @@ export function AppProvider({children}: PropsWithChildren) {
       const restoredSettings = {...DEFAULT_SETTINGS, ...parseStored(storedSettings, {})};
       setSettings(restoredSettings);
       downloadManager.setAnalyticsEnabled(restoredSettings.analyticsEnabled).catch(() => undefined);
+      downloadManager.setUsageInsightsEnabled(restoredSettings.usageInsightsEnabled).catch(() => undefined);
       setHistory(parseStored(storedHistory, []));
       setBookmarks(parseStored(storedBookmarks, []));
     });

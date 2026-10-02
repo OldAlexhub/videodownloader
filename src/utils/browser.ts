@@ -26,6 +26,16 @@ export function normalizeAddress(
   return `${SEARCH_URLS[engine]}${encodeURIComponent(value)}`;
 }
 
+export function submittedSearchTerm(input: string): string | undefined {
+  const value = input.trim();
+  if (!value || /^[a-z][a-z\d+.-]*:\/\//i.test(value) ||
+    /^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/|$)/i.test(value) ||
+    /^[^\s]+\.[a-z]{2,}(\/[^\s]*)?$/i.test(value)) {
+    return undefined;
+  }
+  return value.slice(0, 80);
+}
+
 export function inferMediaFromUrl(
   url: string,
   pageUrl: string,

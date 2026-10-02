@@ -33,7 +33,9 @@ interface NativeDownloadManagerShape {
   clearBrowserData(kind: string): Promise<boolean>;
   clearAllData(): Promise<boolean>;
   setAnalyticsEnabled(enabled: boolean): Promise<boolean>;
+  setUsageInsightsEnabled(enabled: boolean): Promise<boolean>;
   trackEvent(name: string, properties: Record<string, string | number | boolean>): Promise<boolean>;
+  trackUsageInsight(name: 'search_performed' | 'site_visited', properties: Record<string, string>): Promise<boolean>;
   inspectManifest(sourceUrl: string, pageUrl: string, title: string): Promise<DetectedMedia[]>;
   setKeepScreenAwake(enabled: boolean): Promise<boolean>;
 }
@@ -86,7 +88,9 @@ export const downloadManager = {
   clearBrowserData: (kind: 'cookies' | 'cache' | 'all') => requireNative().clearBrowserData(kind),
   clearAllData: () => requireNative().clearAllData(),
   setAnalyticsEnabled: (enabled: boolean) => requireNative().setAnalyticsEnabled(enabled),
+  setUsageInsightsEnabled: (enabled: boolean) => requireNative().setUsageInsightsEnabled(enabled),
   trackEvent: (name: string, properties: Record<string, string | number | boolean> = {}) => requireNative().trackEvent(name, properties),
+  trackUsageInsight: (name: 'search_performed' | 'site_visited', properties: Record<string, string>) => requireNative().trackUsageInsight(name, properties),
   inspectManifest: (sourceUrl: string, pageUrl: string, title: string) => requireNative().inspectManifest(sourceUrl, pageUrl, title),
   setKeepScreenAwake: (enabled: boolean) => requireNative().setKeepScreenAwake(enabled),
 };

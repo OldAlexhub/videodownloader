@@ -1,9 +1,7 @@
-Version 1.0.0
+Version 1.0.2
 
-- Browse supported websites and detect downloadable media
-- Choose real source qualities before downloading
-- Run reliable background downloads with pause and resume where supported
-- Organize videos, audio, and images in a searchable local library
-- Play downloaded media with built-in Media3 controls
-- Find duplicate files and review local storage use
-- Use the complete downloader free with no account or subscription
+- Keep download and player controls clear of Android navigation controls
+- Improve download streaming efficiency and local video playback controls
+- Add optional, off-by-default aggregate search and visited-site insights
+- Include top search terms and most visited domains in the protected server dashboard
+- Continue using the full downloader free with no account or subscription

@@ -1,5 +1,6 @@
 import React, {useMemo, useState} from 'react';
 import {Image, Modal, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Check, Download, FileAudio, FileVideo, ImageIcon, X} from 'lucide-react-native';
 import type {DetectedMedia} from '../types';
 import {colors, radius, spacing} from '../theme';
@@ -20,6 +21,7 @@ function recommendation(items: DetectedMedia[]): DetectedMedia | undefined {
 }
 
 export function QualitySheet({visible, items, onClose, onDownload}: Props) {
+  const insets = useSafeAreaInsets();
   const recommended = useMemo(() => recommendation(items), [items]);
   const [selectedId, setSelectedId] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -100,7 +102,7 @@ export function QualitySheet({visible, items, onClose, onDownload}: Props) {
               );
             })}
           </ScrollView>
-          <View style={styles.footer}>
+          <View style={[styles.footer, {paddingBottom: Math.max(spacing.lg, insets.bottom + spacing.sm)}]}>
             <Pressable onPress={onClose} style={styles.cancel}><Text style={styles.cancelText}>Cancel</Text></Pressable>
             <Pressable disabled={!selected || busy} onPress={submit} style={[styles.download, (!selected || busy) && styles.disabled]}>
               <Download color={colors.white} size={19} />

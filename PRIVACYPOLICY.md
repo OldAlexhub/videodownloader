@@ -43,11 +43,14 @@ Analytics events may include:
 - Source website domain
 - Media type, format, source quality, byte counts, duration, status, and failure code
 - Ad format and placement impression events
+- If the separate Search & website insights setting is enabled: submitted search terms and visited website domains, used for aggregate top-term and top-site reports
 - Player-open and app-open events
 
 The analytics server may use the request IP address to derive an approximate city and country, then discards the IP without storing it. The server replaces the random installation identifier with a keyed HMAC hash before database storage. The app does not request Android location permission for analytics and does not send GPS coordinates.
 
-The app does not send downloaded media files, video or audio content, WebView cookies, authorization headers, complete signed download URLs, full browsing history, or page content to the Old Alex Hub analytics service.
+Search & website insights is off by default and can be disabled in Settings. It records terms submitted through the browser address bar and website domains from non-private page visits only when both it and Performance analytics are enabled. Private sessions are excluded. The service receives the search term or site domain, not the visited page path or URL query string. These events appear in aggregate top-term and top-site reports; individual search and site values are hidden in the recent-event dashboard. Turning the setting off removes queued search and site events from the device.
+
+The app does not send downloaded media files, video or audio content, WebView cookies, authorization headers, or complete signed download URLs to the Old Alex Hub analytics service. Full browser history and page content are not sent.
 
 Analytics delivery has short timeouts and a bounded local queue. If the analytics server is unavailable, browsing, downloading, playback, local library access, and other features continue normally. Users can disable Performance analytics in Settings. Disabling it clears pending analytics events from the app queue.
 

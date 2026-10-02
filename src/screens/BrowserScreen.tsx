@@ -36,7 +36,7 @@ import {QualitySheet} from '../components/QualitySheet';
 import {SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {colors, radius, spacing} from '../theme';
-import {inferMediaFromUrl, MEDIA_DETECTOR_SCRIPT, normalizeAddress} from '../utils/browser';
+import {inferMediaFromUrl, MEDIA_DETECTOR_SCRIPT, normalizeAddress, submittedSearchTerm} from '../utils/browser';
 import {downloadManager} from '../native/DownloadManager';
 
 interface BrowserTab {
@@ -56,6 +56,7 @@ const USER_AGENT = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, l
 
 export function BrowserScreen() {
   const webView = useRef<any>(null);
+  const lastReportedVisit = useRef<{tabId: string; url: string} | undefined>(undefined);
   const AndroidWebView = WebView as any;
   const {
     browserTarget,
@@ -116,6 +117,14 @@ export function BrowserScreen() {
     setAddress(nextUrl);
   };
 
+  const submitAddress = (input: string) => {
+    const term = submittedSearchTerm(input);
+    if (term && !privateMode && settings.analyticsEnabled && settings.usageInsightsEnabled) {
+      downloadManager.trackUsageInsight('search_performed', {term}).catch(() => undefined);
+    }
+    navigate(input);
+  };
+
   const updateNavigation = (navigation: WebViewNavigation) => {
     setAddress(navigation.url);
     setPageTitle(navigation.title || navigation.url);
@@ -123,6 +132,18 @@ export function BrowserScreen() {
     setCanGoForward(navigation.canGoForward);
     setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: navigation.url, title: navigation.title || navigation.url} : tab));
     if (!navigation.loading) {
+      if (!privateMode && settings.analyticsEnabled && settings.usageInsightsEnabled && /^https?:\/\//i.test(navigation.url)) {
+        const previous = lastReportedVisit.current;
+        if (previous?.tabId !== activeId || previous.url !== navigation.url) {
+          lastReportedVisit.current = {tabId: activeId, url: navigation.url};
+          try {
+            const siteHost = new URL(navigation.url).hostname.toLowerCase();
+            if (siteHost) downloadManager.trackUsageInsight('site_visited', {siteHost}).catch(() => undefined);
+          } catch {
+            // Ignore malformed WebView navigation URLs.
+          }
+        }
+      }
       addHistory(navigation.title, navigation.url, privateMode);
     }
   };
@@ -298,7 +319,7 @@ export function BrowserScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               onChangeText={setAddress}
-              onSubmitEditing={() => navigate(address)}
+              onSubmitEditing={() => submitAddress(address)}
               placeholder="Search or enter web address"
               placeholderTextColor={colors.muted}
               returnKeyType="go"
@@ -344,7 +365,7 @@ export function BrowserScreen() {
             autoCorrect={false}
             onChangeText={setAddress}
             onFocus={() => setAddress(active.url)}
-            onSubmitEditing={() => navigate(address)}
+            onSubmitEditing={() => submitAddress(address)}
             returnKeyType="go"
             selectTextOnFocus
             style={styles.addressInput}
