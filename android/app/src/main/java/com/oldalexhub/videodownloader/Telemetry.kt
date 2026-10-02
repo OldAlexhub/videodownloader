@@ -45,7 +45,11 @@ object Telemetry {
   }
 
   fun isUsageInsightsEnabled(context: Context): Boolean =
-    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(USAGE_INSIGHTS_ENABLED, false)
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(USAGE_INSIGHTS_ENABLED, true)
+
+  fun clearLocalData(context: Context) {
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+  }
 
   fun record(context: Context, type: String, properties: JSONObject = JSONObject()) {
     val appContext = context.applicationContext

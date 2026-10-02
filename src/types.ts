@@ -95,6 +95,7 @@ export interface AppSettings {
   duplicateDetection: boolean;
   searchEngine: 'google' | 'bing' | 'duckduckgo';
   privateByDefault: boolean;
+  blockWebsiteAds: boolean;
   destinationName: string;
   destinationUri?: string;
   analyticsEnabled: boolean;
@@ -111,6 +112,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   duplicateDetection: true,
   searchEngine: 'google',
   privateByDefault: false,
+  blockWebsiteAds: true,
   destinationName: 'Video Downloader & Media Saver',
   analyticsEnabled: true,
   usageInsightsEnabled: true,

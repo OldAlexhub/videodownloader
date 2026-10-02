@@ -17,6 +17,7 @@ import android.os.Looper
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
+import androidx.work.WorkManager
 import com.facebook.react.bridge.ActivityEventListener
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -36,6 +37,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 class VDDownloadManagerModule(private val context: ReactApplicationContext) :
   ReactContextBaseJavaModule(context), ActivityEventListener {
@@ -352,9 +354,25 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
   fun clearAllData(promise: Promise) {
     Thread {
       runCatching {
-        database.list().forEach { record -> record.localUri?.let { runCatching { context.contentResolver.delete(Uri.parse(it), null, null) } } }
+        val records = database.list()
+        records.forEach { record ->
+          DownloadScheduler.cancel(context, record.id)
+        }
+        val workManager = WorkManager.getInstance(context)
+        records.forEach { record ->
+          workManager.cancelUniqueWork("media-download-${record.id}").result.get(10, TimeUnit.SECONDS)
+        }
+        workManager.cancelAllWorkByTag("media-download").result.get(10, TimeUnit.SECONDS)
+        DownloadWorker.awaitRunningWorkers(40, TimeUnit.SECONDS)
+        records.forEach { record ->
+          record.localUri?.let { runCatching { context.contentResolver.delete(Uri.parse(it), null, null) } }
+          DownloadWorker.partFile(context, record.id).delete()
+          DownloadWorker.stateFile(context, record.id).delete()
+        }
         database.deleteAll()
         File(context.cacheDir, "download-parts").deleteRecursively()
+        context.getSharedPreferences("download_settings", 0).edit().clear().apply()
+        Telemetry.clearLocalData(context)
       }.fold(
         onSuccess = {
           Handler(Looper.getMainLooper()).post {

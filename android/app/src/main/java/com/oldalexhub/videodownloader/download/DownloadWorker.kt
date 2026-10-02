@@ -34,6 +34,10 @@ import java.net.URL
 import java.net.URLDecoder
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.math.max
 
 class DownloadWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
@@ -41,7 +45,11 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
   private val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
   private val id = inputData.getString(DownloadScheduler.INPUT_ID).orEmpty()
 
-  override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+  override suspend fun doWork(): Result {
+    val completion = CompletableFuture<Unit>()
+    runningWorkers[id] = completion
+    try {
+      return withContext(Dispatchers.IO) {
     if (id.isBlank()) return@withContext Result.failure()
     createChannel()
     val initial = database.get(id) ?: return@withContext Result.failure()
@@ -123,6 +131,11 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
     } catch (error: Exception) {
       fail("unexpected", error.message ?: "The download could not be completed.")
       Result.failure()
+    }
+      }
+    } finally {
+      completion.complete(Unit)
+      runningWorkers.remove(id, completion)
     }
   }
 
@@ -534,6 +547,21 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
   private class DownloadFailure(val code: String, message: String) : RuntimeException(message)
 
   companion object {
+    private val runningWorkers = ConcurrentHashMap<String, CompletableFuture<Unit>>()
+
+    internal fun awaitRunningWorkers(timeout: Long, unit: TimeUnit) {
+      val deadline = System.nanoTime() + unit.toNanos(timeout)
+      while (true) {
+        val active = runningWorkers.values.toList()
+        if (active.isEmpty()) return
+        active.forEach { completion ->
+          val remaining = deadline - System.nanoTime()
+          if (remaining <= 0) throw TimeoutException("Active downloads did not stop in time.")
+          completion.get(remaining, TimeUnit.NANOSECONDS)
+        }
+      }
+    }
+
     private const val BUFFER_SIZE = 512 * 1024
     private const val MAX_REDIRECTS = 8
     private const val CHANNEL_ID = "media_downloads"

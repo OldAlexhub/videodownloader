@@ -49,11 +49,11 @@ export function DownloadCard({item, onPause, onResume, onCancel, onOpen, onMore,
             )}
           </View>
         </>
-      ) : item.status === 'failed' ? (
+      ) : item.status === 'failed' || item.status === 'cancelled' ? (
         <View style={styles.failure}>
           <CircleAlert color={colors.danger} size={18} />
-          <Text style={styles.failureText}>{item.failureMessage || 'The download could not be completed.'}</Text>
-          <Pressable onPress={onRetry} style={styles.retry}><RotateCcw color={colors.danger} size={16} /><Text style={styles.retryText}>Retry</Text></Pressable>
+          <Text style={styles.failureText}>{item.status === 'cancelled' ? 'Download cancelled.' : (item.failureMessage || 'The download could not be completed.')}</Text>
+          <Pressable accessibilityLabel="Retry download" onPress={onRetry} style={styles.retry}><RotateCcw color={colors.danger} size={16} /><Text style={styles.retryText}>Retry</Text></Pressable>
         </View>
       ) : (
         <View style={styles.completedRow}>

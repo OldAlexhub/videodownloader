@@ -36,7 +36,7 @@ import {QualitySheet} from '../components/QualitySheet';
 import {SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {colors, radius, spacing} from '../theme';
-import {inferMediaFromUrl, MEDIA_DETECTOR_SCRIPT, normalizeAddress, submittedSearchTerm} from '../utils/browser';
+import {inferMediaFromUrl, MEDIA_DETECTOR_SCRIPT, normalizeAddress, submittedSearchTerm, WEBSITE_AD_BLOCKER_SCRIPT} from '../utils/browser';
 import {downloadManager} from '../native/DownloadManager';
 
 interface BrowserTab {
@@ -52,7 +52,7 @@ interface ContextTarget {
 }
 
 const HOME = '';
-const USER_AGENT = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Mobile Safari/537.36 VDMediaSaver/1.0.3';
+const USER_AGENT = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Mobile Safari/537.36 VDMediaSaver/1.0.4';
 
 export function BrowserScreen() {
   const webView = useRef<any>(null);
@@ -60,6 +60,7 @@ export function BrowserScreen() {
   const AndroidWebView = WebView as any;
   const {
     browserTarget,
+    browserResetKey,
     bookmarks,
     detectedMedia,
     addDetectedMedia,
@@ -72,6 +73,8 @@ export function BrowserScreen() {
     activeTab,
     setActiveTab,
   } = useApp();
+  const browserResetKeyRef = useRef(browserResetKey);
+  const blockerSetting = useRef(settings.blockWebsiteAds);
   const [tabs, setTabs] = useState<BrowserTab[]>([{id: 'initial', url: HOME, title: 'New tab'}]);
   const [activeId, setActiveId] = useState('initial');
   const active = tabs.find(tab => tab.id === activeId) || tabs[0];
@@ -87,6 +90,9 @@ export function BrowserScreen() {
   const [libraryVisible, setLibraryVisible] = useState<'history' | 'bookmarks' | null>(null);
   const [contextTarget, setContextTarget] = useState<ContextTarget>();
   const [error, setError] = useState<string>();
+  const injectedScript = settings.blockWebsiteAds
+    ? `${WEBSITE_AD_BLOCKER_SCRIPT}\n${MEDIA_DETECTOR_SCRIPT}`
+    : MEDIA_DETECTOR_SCRIPT;
 
   useEffect(() => {
     if (!browserTarget) {
@@ -101,6 +107,39 @@ export function BrowserScreen() {
   useEffect(() => {
     setPrivateMode(settings.privateByDefault);
   }, [settings.privateByDefault]);
+
+  useEffect(() => {
+    if (browserResetKeyRef.current === browserResetKey) {
+      return;
+    }
+    browserResetKeyRef.current = browserResetKey;
+    setTabs([{id: 'initial', url: HOME, title: 'New tab'}]);
+    setActiveId('initial');
+    setAddress('');
+    setPageTitle('New tab');
+    setCanGoBack(false);
+    setCanGoForward(false);
+    setProgress(0);
+    setLoading(false);
+    setPrivateMode(false);
+    setQualityVisible(false);
+    setTabsVisible(false);
+    setLibraryVisible(null);
+    setContextTarget(undefined);
+    setError(undefined);
+    lastReportedVisit.current = undefined;
+    clearDetectedMedia();
+  }, [browserResetKey, clearDetectedMedia]);
+
+  useEffect(() => {
+    if (blockerSetting.current === settings.blockWebsiteAds) {
+      return;
+    }
+    blockerSetting.current = settings.blockWebsiteAds;
+    if (active.url) {
+      webView.current?.reload();
+    }
+  }, [active.url, settings.blockWebsiteAds]);
 
   useEffect(() => {
     setAddress(active.url);
@@ -394,7 +433,8 @@ export function BrowserScreen() {
           setSupportMultipleWindows
           allowsFullscreenVideo
           mediaPlaybackRequiresUserAction
-          injectedJavaScript={MEDIA_DETECTOR_SCRIPT}
+          injectedJavaScriptBeforeContentLoaded={settings.blockWebsiteAds ? WEBSITE_AD_BLOCKER_SCRIPT : undefined}
+          injectedJavaScript={injectedScript}
           onMessage={handleMessage}
           onNavigationStateChange={updateNavigation}
           onLoadStart={() => {setLoading(true); setError(undefined);}}

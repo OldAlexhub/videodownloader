@@ -1,7 +1,10 @@
-Version 1.0.3
+Version 1.0.4
 
 - Keep download and player controls clear of Android navigation controls
 - Improve download streaming efficiency and local video playback controls
+- Block pop-up windows and common ad slots in the built-in browser; app ads are unchanged
 - Enable aggregate search and visited-site insights by default, with separate Settings controls
 - Include top search terms and most visited domains in the protected server dashboard
+- Improve download cancellation and clearing local app data
+- Keep browser state intact when moving between app sections
 - Continue using the full downloader free with no account or subscription

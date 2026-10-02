@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from 'react';
-import {StatusBar, View} from 'react-native';
+import {StatusBar, StyleSheet, View} from 'react-native';
 import mobileAds, {AdsConsent} from 'react-native-google-mobile-ads';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {AppShell} from './src/components/AppShell';
@@ -17,7 +17,7 @@ function CurrentScreen() {
   const {activeTab} = useApp();
   return (
     <>
-      <View style={{flex: 1, display: activeTab === 'browser' ? 'flex' : 'none'}}>
+      <View style={[styles.browserContainer, activeTab !== 'browser' && styles.hidden]}>
         <BrowserScreen />
       </View>
       {activeTab === 'downloads' ? <DownloadsScreen /> : null}
@@ -27,6 +27,11 @@ function CurrentScreen() {
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  browserContainer: {flex: 1},
+  hidden: {display: 'none'},
+});
 
 function App() {
   const [adsReady, setAdsReady] = useState(false);

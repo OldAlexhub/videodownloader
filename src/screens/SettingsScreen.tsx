@@ -1,12 +1,11 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {useState} from 'react';
-import {Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View} from 'react-native';
+import {ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View} from 'react-native';
 import {AdsConsent} from 'react-native-google-mobile-ads';
 import {ChevronRight, Cookie, Database, Download, Folder, Globe2, Info, LockKeyhole, RotateCcw, Search, ShieldCheck, Trash2, Wifi, X} from 'lucide-react-native';
 import {SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {downloadManager} from '../native/DownloadManager';
-import type {AppSettings} from '../types';
+import {DEFAULT_SETTINGS, type AppSettings} from '../types';
 import {colors, radius, spacing} from '../theme';
 
 type Choice = {
@@ -16,9 +15,10 @@ type Choice = {
 } | null;
 
 export function SettingsScreen() {
-  const {settings, updateSettings, clearHistory, refreshDownloads} = useApp();
+  const {settings, updateSettings, clearHistory, clearBookmarks, clearDetectedMedia, clearBrowserSession, refreshDownloads} = useApp();
   const [choice, setChoice] = useState<Choice>(null);
   const [privacyVisible, setPrivacyVisible] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   const chooseFolder = async () => {
     try {
@@ -36,7 +36,26 @@ export function SettingsScreen() {
 
   const clearAll = () => Alert.alert('Clear all local app data?', 'This permanently deletes download records, partial files, browser data, settings, and files downloaded by this app. This cannot be undone.', [
     {text: 'Cancel', style: 'cancel'},
-    {text: 'Delete everything', style: 'destructive', onPress: async () => {await downloadManager.clearAllData(); await AsyncStorage.clear(); await refreshDownloads(); Alert.alert('Local data cleared');}},
+    {text: 'Delete everything', style: 'destructive', onPress: async () => {
+      setClearing(true);
+      try {
+        await downloadManager.clearAllData();
+        await downloadManager.clearBrowserData('all');
+        await clearHistory();
+        await clearBookmarks();
+        clearDetectedMedia();
+        clearBrowserSession();
+        await updateSettings(DEFAULT_SETTINGS);
+        await downloadManager.setAnalyticsEnabled(DEFAULT_SETTINGS.analyticsEnabled);
+        await downloadManager.setUsageInsightsEnabled(DEFAULT_SETTINGS.usageInsightsEnabled);
+        await refreshDownloads();
+        Alert.alert('Local data cleared');
+      } catch (error) {
+        Alert.alert('Could not clear local data', error instanceof Error ? error.message : 'Please try again.');
+      } finally {
+        setClearing(false);
+      }
+    }},
   ]);
 
   return (
@@ -57,6 +76,7 @@ export function SettingsScreen() {
         <SettingsSection title="Browser">
           <SettingRow icon={<Search color={colors.blue700} size={20} />} title="Search engine" value={engineLabel(settings.searchEngine)} onPress={() => setChoice({title: 'Search engine', key: 'searchEngine', options: [{label: 'Google', value: 'google'}, {label: 'Bing', value: 'bing'}, {label: 'DuckDuckGo', value: 'duckduckgo'}]})} />
           <ToggleRow icon={<LockKeyhole color={colors.blue700} size={20} />} title="Start privately" description="Do not save history in new browser sessions" value={settings.privateByDefault} onChange={value => updateSettings({privateByDefault: value})} />
+          <ToggleRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Block website ads" description="Block pop-up windows and common ad slots in webpages. App ads are unaffected." value={settings.blockWebsiteAds} onChange={value => updateSettings({blockWebsiteAds: value})} />
           <SettingRow icon={<Globe2 color={colors.blue700} size={20} />} title="Clear browser history" onPress={() => Alert.alert('Clear browser history?', 'Saved local browsing history will be removed.', [{text: 'Cancel', style: 'cancel'}, {text: 'Clear', style: 'destructive', onPress: clearHistory}])} />
           <SettingRow icon={<Cookie color={colors.blue700} size={20} />} title="Clear cookies" onPress={() => clearBrowser('cookies')} />
           <SettingRow icon={<Trash2 color={colors.blue700} size={20} />} title="Clear browser cache" onPress={() => clearBrowser('cache')} last />
@@ -71,13 +91,14 @@ export function SettingsScreen() {
         </SettingsSection>
 
         <SettingsSection title="About">
-          <View style={styles.aboutRow}><Image source={require('../../assets/logo.png')} style={imageStyles.logo} /><View><Text style={styles.aboutName}>Video Downloader & Media Saver</Text><Text style={styles.aboutMeta}>Version 1.0.3 · Old Alex Hub</Text></View></View>
+          <View style={styles.aboutRow}><Image source={require('../../assets/logo.png')} style={imageStyles.logo} /><View><Text style={styles.aboutName}>Video Downloader & Media Saver</Text><Text style={styles.aboutMeta}>Version 1.0.4 · Old Alex Hub</Text></View></View>
           <View style={styles.notice}><Text style={styles.noticeText}>Only download media you own, have permission to download, or that is made available for downloading by the content provider. Protected media is not supported.</Text></View>
           <SettingRow icon={<Trash2 color={colors.danger} size={20} />} title="Clear all local app data" danger onPress={clearAll} last />
         </SettingsSection>
       </SafeScrollView>
       <ChoiceModal choice={choice} current={choice ? settings[choice.key] : undefined} onClose={() => setChoice(null)} onSelect={async value => {if (choice) await updateSettings({[choice.key]: value} as Partial<AppSettings>); setChoice(null);}} />
       <PrivacyModal visible={privacyVisible} onClose={() => setPrivacyVisible(false)} />
+      {clearing ? <View style={styles.clearingOverlay}><ActivityIndicator color={colors.blue700} size="large" /><Text style={styles.clearingText}>Clearing local data…</Text></View> : null}
     </View>
   );
 }
@@ -94,7 +115,7 @@ function SettingRow({icon, title, value, onPress, last, danger}: {icon: React.Re
 }
 
 function ToggleRow({icon, title, description, value, onChange, last}: {icon: React.ReactNode; title: string; description: string; value: boolean; onChange: (value: boolean) => void; last?: boolean}) {
-  return <View style={[styles.row, styles.toggleRow, last && styles.last]}><View style={styles.rowIcon}>{icon}</View><View style={styles.toggleCopy}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowDescription}>{description}</Text></View><Switch value={value} onValueChange={onChange} trackColor={{false: '#CBD5E1', true: '#8DD9CC'}} thumbColor={value ? colors.success : colors.white} /></View>;
+  return <View style={[styles.row, styles.toggleRow, last && styles.last]}><View style={styles.rowIcon}>{icon}</View><View style={styles.toggleCopy}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowDescription}>{description}</Text></View><Switch accessibilityLabel={title} accessibilityHint={description} value={value} onValueChange={onChange} trackColor={{false: '#CBD5E1', true: '#8DD9CC'}} thumbColor={value ? colors.success : colors.white} /></View>;
 }
 
 function ChoiceModal({choice, current, onClose, onSelect}: {choice: Choice; current: unknown; onClose: () => void; onSelect: (value: string | number) => void}) {
@@ -135,6 +156,8 @@ const styles = StyleSheet.create({
   choiceSelected: {fontWeight: '900', color: colors.blue700},
   dot: {width: 10, height: 10, borderRadius: 5, backgroundColor: colors.blue700},
   privacy: {flex: 1, backgroundColor: colors.white, paddingTop: 20, paddingHorizontal: spacing.lg},
+  clearingOverlay: {position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 5, alignItems: 'center', justifyContent: 'center', gap: spacing.md, backgroundColor: 'rgba(255,255,255,0.94)'},
+  clearingText: {fontSize: 14, fontWeight: '700', color: colors.ink},
   privacyContent: {paddingBottom: 40},
   privacyHeading: {fontSize: 16, fontWeight: '900', color: colors.ink, marginTop: spacing.lg},
   privacyText: {fontSize: 13, lineHeight: 21, color: colors.muted, marginTop: spacing.sm},

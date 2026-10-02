@@ -13,12 +13,14 @@ import {colors, radius, spacing} from '../theme';
 import {formatBytes, formatDate} from '../utils/format';
 
 export function DownloadsScreen() {
-  const {downloads, refreshDownloads, openBrowser} = useApp();
+  const {downloads, refreshDownloads, openBrowser, setActiveTab} = useApp();
   const [selected, setSelected] = useState<DownloadItem>();
   const [rename, setRename] = useState<DownloadItem>();
   const active = useMemo(() => downloads.filter(item => ['queued', 'preparing', 'downloading', 'paused', 'retrying', 'processing'].includes(item.status)), [downloads]);
   const completed = useMemo(() => downloads.filter(item => item.status === 'completed' && !item.hiddenFromDownloads), [downloads]);
   const failed = useMemo(() => downloads.filter(item => ['failed', 'cancelled'].includes(item.status)), [downloads]);
+  const showEmptyState = active.length + completed.length + failed.length === 0;
+  const hasSavedItems = downloads.some(item => item.status === 'completed' && item.hiddenFromDownloads);
 
   const perform = async (action: () => Promise<unknown>) => {
     try { await action(); await refreshDownloads(); } catch (error) { Alert.alert('Action unavailable', error instanceof Error ? error.message : 'Please try again.'); }
@@ -56,15 +58,15 @@ export function DownloadsScreen() {
   return (
     <View style={styles.screen}>
       <View style={styles.header}><View><Text style={styles.title}>Downloads</Text><Text style={styles.subtitle}>{active.length} active · {completed.length} completed</Text></View></View>
-      {downloads.length === 0 ? <EmptyState title="No downloads yet" message="Detected media you save will appear here with live progress and controls." action="Browse media" onAction={() => openBrowser()} /> : (
+      {showEmptyState ? <EmptyState title={hasSavedItems ? 'No recent downloads' : 'No downloads yet'} message={hasSavedItems ? 'Items cleared from this list are still available in your Library.' : 'Detected media you save will appear here with live progress and controls.'} action={hasSavedItems ? 'Open library' : 'Browse media'} onAction={() => hasSavedItems ? setActiveTab('library') : openBrowser()} /> : (
         <SafeScrollView refreshControl={undefined}>
           {active.length > 0 ? (
             <>
               <SectionHeader title="Active" />
               <View style={styles.bulkRow}>
-                <Pressable onPress={() => Promise.all(active.filter(item => item.status !== 'paused').map(item => downloadManager.pause(item.id))).then(refreshDownloads)} style={styles.bulkButton}><Pause color={colors.blue700} size={16} /><Text style={styles.bulkText}>Pause all</Text></Pressable>
-                <Pressable onPress={() => Promise.all(active.filter(item => item.status === 'paused').map(item => downloadManager.resume(item.id))).then(refreshDownloads)} style={styles.bulkButton}><Play color={colors.blue700} size={16} /><Text style={styles.bulkText}>Resume all</Text></Pressable>
-                <Pressable onPress={() => Alert.alert('Cancel queue?', 'All queued and active downloads will be cancelled.', [{text: 'Keep', style: 'cancel'}, {text: 'Cancel queue', style: 'destructive', onPress: () => Promise.all(active.map(item => downloadManager.cancel(item.id))).then(refreshDownloads)}])} style={styles.bulkButton}><XCircle color={colors.danger} size={16} /><Text style={[styles.bulkText, {color: colors.danger}]}>Cancel</Text></Pressable>
+                <Pressable onPress={() => perform(() => Promise.all(active.filter(item => item.status !== 'paused').map(item => downloadManager.pause(item.id))))} style={styles.bulkButton}><Pause color={colors.blue700} size={16} /><Text style={styles.bulkText}>Pause all</Text></Pressable>
+                <Pressable onPress={() => perform(() => Promise.all(active.filter(item => item.status === 'paused').map(item => downloadManager.resume(item.id))))} style={styles.bulkButton}><Play color={colors.blue700} size={16} /><Text style={styles.bulkText}>Resume all</Text></Pressable>
+                <Pressable onPress={() => Alert.alert('Cancel queue?', 'All queued and active downloads will be cancelled.', [{text: 'Keep', style: 'cancel'}, {text: 'Cancel queue', style: 'destructive', onPress: () => perform(() => Promise.all(active.map(item => downloadManager.cancel(item.id))))}])} style={styles.bulkButton}><XCircle color={colors.danger} size={16} /><Text style={[styles.bulkText, {color: colors.danger}]}>Cancel</Text></Pressable>
               </View>
               {active.map(card)}
             </>
@@ -80,7 +82,8 @@ export function DownloadsScreen() {
 }
 
 function ActionSheet({item, onClose, onOpen, onShare, onRename, onDelete}: {item?: DownloadItem; onClose: () => void; onOpen: () => void; onShare: () => void; onRename: () => void; onDelete: () => void}) {
-  return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose}><Pressable onPress={onClose} style={styles.sheetBackdrop}><View style={styles.sheet} onStartShouldSetResponder={() => true}><Text numberOfLines={2} style={styles.sheetTitle}>{item?.finalFilename}</Text><SheetAction icon={<Play color={colors.blue700} />} label="Open or play" onPress={onOpen} /><SheetAction icon={<Share2 color={colors.blue700} />} label="Share" onPress={onShare} /><SheetAction icon={<Edit3 color={colors.blue700} />} label="Rename" onPress={onRename} /><SheetAction icon={<Info color={colors.blue700} />} label={`${formatBytes(item?.actualBytes)} · ${formatDate(item?.completedAt)}`} onPress={() => undefined} disabled /><SheetAction icon={<Trash2 color={colors.danger} />} label="Delete file" onPress={onDelete} danger /></View></Pressable></Modal>;
+  const hasFile = item?.status === 'completed';
+  return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose}><Pressable onPress={onClose} style={styles.sheetBackdrop}><View style={styles.sheet} onStartShouldSetResponder={() => true}><Text numberOfLines={2} style={styles.sheetTitle}>{item?.finalFilename}</Text><SheetAction icon={<Play color={colors.blue700} />} label="Open or play" onPress={onOpen} disabled={!hasFile} /><SheetAction icon={<Share2 color={colors.blue700} />} label="Share" onPress={onShare} disabled={!hasFile} /><SheetAction icon={<Edit3 color={colors.blue700} />} label="Rename" onPress={onRename} disabled={!hasFile} /><SheetAction icon={<Info color={colors.blue700} />} label={hasFile ? `${formatBytes(item?.actualBytes)} · ${formatDate(item?.completedAt)}` : item?.status === 'cancelled' ? 'Cancelled' : 'Download failed'} onPress={() => undefined} disabled /><SheetAction icon={<Trash2 color={colors.danger} />} label={hasFile ? 'Delete file' : 'Remove download'} onPress={onDelete} danger /></View></Pressable></Modal>;
 }
 
 function SheetAction({icon, label, onPress, danger, disabled}: {icon: React.ReactNode; label: string; onPress: () => void; danger?: boolean; disabled?: boolean}) {

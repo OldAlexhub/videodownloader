@@ -97,6 +97,40 @@ export function inferMediaFromUrl(
   };
 }
 
+export const WEBSITE_AD_BLOCKER_SCRIPT = `
+(function () {
+  if (window.__VDMS_WEBSITE_AD_BLOCKER__) return true;
+  window.__VDMS_WEBSITE_AD_BLOCKER__ = true;
+
+  window.open = function () { return null; };
+
+  const adSelectors = [
+    'iframe[src*="doubleclick.net"]',
+    'iframe[src*="googlesyndication.com"]',
+    'iframe[src*="adservice.google.com"]',
+    'ins.adsbygoogle',
+    '[id^="google_ads_"]',
+    '[class*="adsbygoogle"]',
+    '[class*="advertisement"]',
+    '[id*="advertisement"]',
+    '[class*="ad-slot"]',
+    '[id*="ad-slot"]',
+    '[aria-label="Advertisement"]',
+    '[aria-label="advertisement"]',
+    '[aria-label="Sponsored"]',
+    '[aria-label="sponsored"]',
+    '[class*="ad-overlay"]',
+    '[id*="ad-overlay"]'
+  ].join(',');
+  const removeCommonAdSlots = () => {
+    document.querySelectorAll(adSelectors).forEach(element => element.remove());
+  };
+  removeCommonAdSlots();
+  new MutationObserver(removeCommonAdSlots).observe(document.documentElement || document, {childList:true, subtree:true});
+  return true;
+})();
+`;
+
 export const MEDIA_DETECTOR_SCRIPT = `
 (function () {
   if (window.__VDMS_INSTALLED__) return true;

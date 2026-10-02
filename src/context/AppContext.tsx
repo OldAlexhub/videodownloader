@@ -31,7 +31,9 @@ interface AppContextValue {
   activeTab: TabKey;
   setActiveTab: (tab: TabKey) => void;
   browserTarget?: string;
+  browserResetKey: number;
   openBrowser: (url?: string) => void;
+  clearBrowserSession: () => void;
   downloads: DownloadItem[];
   refreshDownloads: () => Promise<void>;
   settings: AppSettings;
@@ -40,6 +42,7 @@ interface AppContextValue {
   addHistory: (title: string, url: string, isPrivate: boolean) => Promise<void>;
   clearHistory: () => Promise<void>;
   bookmarks: Bookmark[];
+  clearBookmarks: () => Promise<void>;
   toggleBookmark: (title: string, url: string) => Promise<void>;
   detectedMedia: DetectedMedia[];
   addDetectedMedia: (item: DetectedMedia) => void;
@@ -63,12 +66,16 @@ function parseStored<T>(value: string | null, fallback: T): T {
 export function AppProvider({children}: PropsWithChildren) {
   const [activeTab, setActiveTab] = useState<TabKey>('browser');
   const [browserTarget, setBrowserTarget] = useState<string>();
+  const [browserResetKey, setBrowserResetKey] = useState(0);
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [history, setHistory] = useState<BrowserHistoryItem[]>([]);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [detectedMedia, setDetectedMedia] = useState<DetectedMedia[]>([]);
   const refreshInFlight = useRef(false);
+  const settingsRef = useRef<AppSettings>(DEFAULT_SETTINGS);
+  const settingsLoaded = useRef(false);
+  const settingsPatchBeforeLoad = useRef<Partial<AppSettings>>({});
 
   const refreshDownloads = useCallback(async () => {
     if (refreshInFlight.current) {
@@ -92,8 +99,17 @@ export function AppProvider({children}: PropsWithChildren) {
       AsyncStorage.getItem(STORAGE.history),
       AsyncStorage.getItem(STORAGE.bookmarks),
     ]).then(([storedSettings, storedHistory, storedBookmarks]) => {
-      const restoredSettings = {...DEFAULT_SETTINGS, ...parseStored(storedSettings, {})};
+      const restoredSettings = {
+        ...DEFAULT_SETTINGS,
+        ...parseStored(storedSettings, {}),
+        ...settingsPatchBeforeLoad.current,
+      };
+      settingsRef.current = restoredSettings;
       setSettings(restoredSettings);
+      settingsLoaded.current = true;
+      if (Object.keys(settingsPatchBeforeLoad.current).length > 0) {
+        AsyncStorage.setItem(STORAGE.settings, JSON.stringify(restoredSettings)).catch(() => undefined);
+      }
       downloadManager.setAnalyticsEnabled(restoredSettings.analyticsEnabled).catch(() => undefined);
       downloadManager.setUsageInsightsEnabled(restoredSettings.usageInsightsEnabled).catch(() => undefined);
       setHistory(parseStored(storedHistory, []));
@@ -136,11 +152,19 @@ export function AppProvider({children}: PropsWithChildren) {
   }, [refreshDownloads]);
 
   const updateSettings = useCallback(async (patch: Partial<AppSettings>) => {
-    setSettings(current => {
-      const next = {...current, ...patch};
-      AsyncStorage.setItem(STORAGE.settings, JSON.stringify(next));
-      return next;
-    });
+    const next = {...settingsRef.current, ...patch};
+    settingsRef.current = next;
+    if (!settingsLoaded.current) {
+      Object.assign(settingsPatchBeforeLoad.current, patch);
+    }
+    setSettings(next);
+    try {
+      await AsyncStorage.setItem(STORAGE.settings, JSON.stringify(next));
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('Unable to save app settings', error);
+      }
+    }
   }, []);
 
   const addHistory = useCallback(async (title: string, url: string, isPrivate: boolean) => {
@@ -160,6 +184,11 @@ export function AppProvider({children}: PropsWithChildren) {
   const clearHistory = useCallback(async () => {
     setHistory([]);
     await AsyncStorage.removeItem(STORAGE.history);
+  }, []);
+
+  const clearBookmarks = useCallback(async () => {
+    setBookmarks([]);
+    await AsyncStorage.removeItem(STORAGE.bookmarks);
   }, []);
 
   const toggleBookmark = useCallback(async (title: string, url: string) => {
@@ -247,11 +276,19 @@ export function AppProvider({children}: PropsWithChildren) {
     setActiveTab('browser');
   }, []);
 
+  const clearBrowserSession = useCallback(() => {
+    setBrowserTarget(undefined);
+    setBrowserResetKey(current => current + 1);
+    setDetectedMedia([]);
+  }, []);
+
   const value = useMemo<AppContextValue>(() => ({
     activeTab,
     setActiveTab,
     browserTarget,
+    browserResetKey,
     openBrowser,
+    clearBrowserSession,
     downloads,
     refreshDownloads,
     settings,
@@ -260,15 +297,16 @@ export function AppProvider({children}: PropsWithChildren) {
     addHistory,
     clearHistory,
     bookmarks,
+    clearBookmarks,
     toggleBookmark,
     detectedMedia,
     addDetectedMedia,
     clearDetectedMedia,
     enqueueMedia,
   }), [
-    activeTab, browserTarget, downloads, settings, history, bookmarks, detectedMedia,
-    refreshDownloads, updateSettings, addHistory, clearHistory, toggleBookmark,
-    addDetectedMedia, clearDetectedMedia, enqueueMedia, openBrowser,
+    activeTab, browserTarget, browserResetKey, downloads, settings, history, bookmarks, detectedMedia,
+    refreshDownloads, updateSettings, addHistory, clearHistory, clearBookmarks, toggleBookmark,
+    addDetectedMedia, clearDetectedMedia, enqueueMedia, openBrowser, clearBrowserSession,
   ]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

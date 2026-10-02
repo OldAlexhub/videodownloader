@@ -10,6 +10,8 @@ SMART MEDIA DETECTION
 
 Browse supported pages and let the app identify downloadable video, audio, images, HLS, and supported DASH media. Related qualities are grouped into one clear selection screen so you can compare resolution, format, audio availability, and estimated size.
 
+The built-in browser blocks pop-up windows and common website ad slots by default. This does not affect ads shown by the app itself.
+
 RELIABLE DOWNLOAD MANAGER
 
 - Background downloads
@@ -42,7 +44,7 @@ Downloads use Android scoped storage. Save to the organized default media folder
 
 PRIVACY AND CONTROL
 
-Downloaded media stays on your device and is not uploaded to Old Alex Hub. Optional performance analytics can send limited text metadata, source domain, results, and ad impression events to help improve reliability. Analytics can be turned off in Settings. Google AdMob supports the free app and may process advertising data according to consent and device settings.
+Downloaded media stays on your device and is not uploaded to Old Alex Hub. Performance analytics and Search & website insights are on by default and can each be turned off in Settings. Analytics sends limited text metadata, source domains, results, and ad impression events to Old Alex Hub; when both settings are on, submitted search terms and visited website domains from non-private sessions are used in aggregate reports. Full page URLs are not sent. Google AdMob supports the free app and may process advertising data according to consent and device settings.
 
 IMPORTANT
 
