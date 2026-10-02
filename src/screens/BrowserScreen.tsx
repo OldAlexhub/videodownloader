@@ -52,7 +52,7 @@ interface ContextTarget {
 }
 
 const HOME = '';
-const USER_AGENT = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Mobile Safari/537.36 VDMediaSaver/1.0';
+const USER_AGENT = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Mobile Safari/537.36 VDMediaSaver/1.0.3';
 
 export function BrowserScreen() {
   const webView = useRef<any>(null);
