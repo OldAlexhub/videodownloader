@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from 'react';
-import {StatusBar} from 'react-native';
+import {StatusBar, View} from 'react-native';
 import mobileAds, {AdsConsent} from 'react-native-google-mobile-ads';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {AppShell} from './src/components/AppShell';
@@ -15,11 +15,17 @@ import {AdConsentProvider} from './src/ads/AdConsentContext';
 
 function CurrentScreen() {
   const {activeTab} = useApp();
-  if (activeTab === 'downloads') return <DownloadsScreen />;
-  if (activeTab === 'library') return <LibraryScreen />;
-  if (activeTab === 'tools') return <SmartToolsScreen />;
-  if (activeTab === 'settings') return <SettingsScreen />;
-  return <BrowserScreen />;
+  return (
+    <>
+      <View style={{flex: 1, display: activeTab === 'browser' ? 'flex' : 'none'}}>
+        <BrowserScreen />
+      </View>
+      {activeTab === 'downloads' ? <DownloadsScreen /> : null}
+      {activeTab === 'library' ? <LibraryScreen /> : null}
+      {activeTab === 'tools' ? <SmartToolsScreen /> : null}
+      {activeTab === 'settings' ? <SettingsScreen /> : null}
+    </>
+  );
 }
 
 function App() {

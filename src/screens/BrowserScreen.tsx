@@ -69,6 +69,7 @@ export function BrowserScreen() {
     addHistory,
     toggleBookmark,
     settings,
+    activeTab,
     setActiveTab,
   } = useApp();
   const [tabs, setTabs] = useState<BrowserTab[]>([{id: 'initial', url: HOME, title: 'New tab'}]);
@@ -249,6 +250,9 @@ export function BrowserScreen() {
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (activeTab !== 'browser') {
+        return false;
+      }
       if (contextTarget) {
         setContextTarget(undefined);
         return true;
@@ -282,7 +286,7 @@ export function BrowserScreen() {
       return false;
     });
     return () => subscription.remove();
-  }, [active.url, activeId, canGoBack, clearDetectedMedia, contextTarget, libraryVisible, qualityVisible, tabsVisible]);
+  }, [active.url, activeId, activeTab, canGoBack, clearDetectedMedia, contextTarget, libraryVisible, qualityVisible, tabsVisible]);
 
   const openDetectedMedia = () => {
     if (settings.defaultQuality === 'ask') {

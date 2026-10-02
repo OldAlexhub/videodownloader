@@ -1,5 +1,5 @@
-import React, {PropsWithChildren, ReactNode} from 'react';
-import {Pressable, StyleSheet, Text, View} from 'react-native';
+import React, {PropsWithChildren, ReactNode, useEffect} from 'react';
+import {BackHandler, Pressable, StyleSheet, Text, View} from 'react-native';
 import {Bot, Download, Globe2, Library, Settings} from 'lucide-react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import type {TabKey} from '../types';
@@ -20,6 +20,16 @@ export function AppShell({children}: PropsWithChildren) {
   const {activeTab, setActiveTab, downloads} = useApp();
   const insets = useSafeAreaInsets();
   const showBanner = activeTab !== 'browser';
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (activeTab === 'browser') return false;
+      setActiveTab('browser');
+      return true;
+    });
+    return () => subscription.remove();
+  }, [activeTab, setActiveTab]);
+
   return (
     <View style={[styles.shell, {paddingTop: insets.top}]}>
       <View style={styles.content}>{children}</View>
