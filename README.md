@@ -84,6 +84,8 @@ Unencrypted HLS media playlists are downloaded segment by segment and resume at 
 
 The WebView detector observes media elements, source tags, metadata events, fetch responses, XHR responses, navigation requests, content types, URL extensions, manifest types, visible dimensions, activity, and page prominence. Results are deduplicated by URL and logical media group. Small images, common icon and tracking patterns, and low-confidence resources are filtered.
 
+Long-pressing a webpage link or media item opens browser actions for opening it in the current tab or a new tab, copying, sharing, bookmarking, and downloading recognized media. Links that request a separate browser window open as a new in-app tab. Android's system Back button closes an open browser sheet first, then navigates webpage history, then returns the active tab to the browser home page before allowing the app to close.
+
 Private sessions use WebView incognito mode, do not add local history, disable shared cookies for that view, and avoid persistent DOM storage. The app does not claim that private mode provides network anonymity.
 
 ## Storage

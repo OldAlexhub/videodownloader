@@ -104,6 +104,69 @@ export const MEDIA_DETECTOR_SCRIPT = `
     sent.add(url);
     window.ReactNativeWebView.postMessage(JSON.stringify({type:'media', url:url, meta:meta || {}}));
   };
+  let holdTimer = null;
+  let holdStart = null;
+  let holdFired = false;
+  let lastContextAt = 0;
+  const contextDetails = (rawTarget) => {
+    const element = rawTarget && rawTarget.nodeType === 1 ? rawTarget : rawTarget && rawTarget.parentElement;
+    if (!element || !element.closest) return null;
+    const link = element.closest('a[href]');
+    const media = link ? null : element.closest('img[src],video[src],audio[src],source[src]');
+    const target = link || media;
+    if (!target) return null;
+    const tag = target.tagName.toLowerCase();
+    const source = link ? link.href : (target.currentSrc || target.src || target.getAttribute('src'));
+    let url = '';
+    try { url = new URL(source, document.baseURI).href; } catch (_) { return null; }
+    if (!/^https?:/i.test(url)) return null;
+    const kind = link ? 'link' : (tag === 'img' ? 'image' : tag === 'audio' ? 'audio' : 'video');
+    const title = (link ? link.textContent : target.getAttribute('alt') || target.getAttribute('title') || document.title || url).trim().slice(0, 180);
+    return {type:'context', url:url, title:title || url, kind:kind};
+  };
+  const cancelHold = () => {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = null;
+    holdStart = null;
+  };
+  const showContext = (details) => {
+    if (!details) return;
+    lastContextAt = Date.now();
+    window.ReactNativeWebView.postMessage(JSON.stringify(details));
+  };
+  document.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 1) return;
+    const details = contextDetails(event.target);
+    if (!details) return;
+    cancelHold();
+    holdFired = false;
+    holdStart = {x:event.touches[0].clientX, y:event.touches[0].clientY};
+    holdTimer = setTimeout(() => {
+      holdFired = true;
+      showContext(details);
+    }, 650);
+  }, {capture:true, passive:true});
+  document.addEventListener('touchmove', (event) => {
+    if (!holdStart || event.touches.length !== 1) return;
+    if (Math.abs(event.touches[0].clientX - holdStart.x) > 12 || Math.abs(event.touches[0].clientY - holdStart.y) > 12) cancelHold();
+  }, {capture:true, passive:true});
+  document.addEventListener('touchend', (event) => {
+    cancelHold();
+    if (holdFired) {
+      event.preventDefault();
+      event.stopPropagation();
+      holdFired = false;
+    }
+  }, {capture:true, passive:false});
+  document.addEventListener('touchcancel', cancelHold, {capture:true, passive:true});
+  document.addEventListener('contextmenu', (event) => {
+    const details = contextDetails(event.target);
+    if (!details) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelHold();
+    if (Date.now() - lastContextAt > 800) showContext(details);
+  }, true);
   const inspect = () => {
     document.querySelectorAll('video,audio').forEach((node) => {
       const rect = node.getBoundingClientRect();

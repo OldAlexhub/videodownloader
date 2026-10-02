@@ -2,6 +2,7 @@ import Clipboard from '@react-native-clipboard/clipboard';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   Alert,
+  BackHandler,
   Image,
   Modal,
   Pressable,
@@ -15,6 +16,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bookmark,
+  Copy,
   Download,
   Globe2,
   History,
@@ -41,6 +43,12 @@ interface BrowserTab {
   id: string;
   url: string;
   title: string;
+}
+
+interface ContextTarget {
+  url: string;
+  title: string;
+  kind: 'link' | 'image' | 'video' | 'audio';
 }
 
 const HOME = '';
@@ -75,6 +83,7 @@ export function BrowserScreen() {
   const [qualityVisible, setQualityVisible] = useState(false);
   const [tabsVisible, setTabsVisible] = useState(false);
   const [libraryVisible, setLibraryVisible] = useState<'history' | 'bookmarks' | null>(null);
+  const [contextTarget, setContextTarget] = useState<ContextTarget>();
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -125,6 +134,16 @@ export function BrowserScreen() {
         Alert.alert('Protected media', 'Protected media cannot be downloaded.');
         return;
       }
+      if (payload.type === 'context') {
+        if (/^https?:\/\//i.test(payload.url) && ['link', 'image', 'video', 'audio'].includes(payload.kind)) {
+          setContextTarget({
+            url: payload.url,
+            title: String(payload.title || payload.url).slice(0, 180),
+            kind: payload.kind,
+          });
+        }
+        return;
+      }
       if (payload.type !== 'media') {
         return;
       }
@@ -156,16 +175,28 @@ export function BrowserScreen() {
     }
   };
 
-  const newTab = () => {
-    const id = `${Date.now()}`;
-    setTabs(current => [...current, {id, url: HOME, title: 'New tab'}]);
+  const openNewTab = (url = HOME, title = 'New tab') => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setTabs(current => [...current, {id, url, title}]);
     setActiveId(id);
-    setAddress('');
+    setAddress(url);
+    setPageTitle(title);
+    setCanGoBack(false);
+    setCanGoForward(false);
+    setError(undefined);
     setTabsVisible(false);
     clearDetectedMedia();
   };
 
+  const newTab = () => openNewTab();
+
   const closeTab = (id: string) => {
+    if (id === activeId) {
+      setCanGoBack(false);
+      setCanGoForward(false);
+      setError(undefined);
+      clearDetectedMedia();
+    }
     setTabs(current => {
       const remaining = current.filter(tab => tab.id !== id);
       if (remaining.length === 0) {
@@ -180,8 +211,57 @@ export function BrowserScreen() {
     });
   };
 
+  const selectTab = (id: string) => {
+    setActiveId(id);
+    setCanGoBack(false);
+    setCanGoForward(false);
+    setError(undefined);
+    setTabsVisible(false);
+    clearDetectedMedia();
+  };
+
   const pageItems = useMemo(() => detectedMedia.filter(item => item.pageUrl === active.url || detectedMedia.length === 1), [active.url, detectedMedia]);
   const saved = bookmarks.some(item => item.url === active.url);
+  const contextMedia = useMemo(() => contextTarget
+    ? inferMediaFromUrl(contextTarget.url, active.url, contextTarget.title || pageTitle)
+    : null, [active.url, contextTarget, pageTitle]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (contextTarget) {
+        setContextTarget(undefined);
+        return true;
+      }
+      if (qualityVisible) {
+        setQualityVisible(false);
+        return true;
+      }
+      if (tabsVisible) {
+        setTabsVisible(false);
+        return true;
+      }
+      if (libraryVisible) {
+        setLibraryVisible(null);
+        return true;
+      }
+      if (active.url && canGoBack) {
+        webView.current?.goBack();
+        return true;
+      }
+      if (active.url) {
+        setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: HOME, title: 'New tab'} : tab));
+        setAddress('');
+        setPageTitle('New tab');
+        setCanGoBack(false);
+        setCanGoForward(false);
+        setError(undefined);
+        clearDetectedMedia();
+        return true;
+      }
+      return false;
+    });
+    return () => subscription.remove();
+  }, [active.url, activeId, canGoBack, clearDetectedMedia, contextTarget, libraryVisible, qualityVisible, tabsVisible]);
 
   const openDetectedMedia = () => {
     if (settings.defaultQuality === 'ask') {
@@ -248,7 +328,7 @@ export function BrowserScreen() {
         </SafeScrollView>
         <BrowserToolbar tabs={tabs.length} onTabs={() => setTabsVisible(true)} onNew={newTab} />
         <ListModal type={libraryVisible} history={history} bookmarks={bookmarks} onClose={() => setLibraryVisible(null)} onOpen={url => {setLibraryVisible(null); navigate(url);}} />
-        <TabsModal visible={tabsVisible} tabs={tabs} activeId={activeId} onClose={() => setTabsVisible(false)} onNew={newTab} onSelect={id => {setActiveId(id); setTabsVisible(false);}} onRemove={closeTab} />
+        <TabsModal visible={tabsVisible} tabs={tabs} activeId={activeId} onClose={() => setTabsVisible(false)} onNew={newTab} onSelect={selectTab} onRemove={closeTab} />
       </View>
     );
   }
@@ -274,10 +354,8 @@ export function BrowserScreen() {
         <Pressable onPress={() => webView.current?.reload()} style={styles.navButton}><RefreshCw color={colors.ink} size={19} /></Pressable>
       </View>
       {loading ? <View style={styles.progressTrack}><View style={[styles.progressFill, {width: `${Math.max(4, progress * 100)}%`}]} /></View> : null}
-      {error ? (
-        <View style={styles.errorState}><Globe2 color={colors.muted} size={38} /><Text style={styles.errorTitle}>Page could not be loaded</Text><Text style={styles.errorBody}>{error}</Text><Pressable onPress={() => webView.current?.reload()} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View>
-      ) : (
-        <AndroidWebView
+      <AndroidWebView
+          key={active.id}
           ref={webView}
           source={{uri: active.url}}
           style={styles.webView}
@@ -288,7 +366,7 @@ export function BrowserScreen() {
           thirdPartyCookiesEnabled={!privateMode}
           sharedCookiesEnabled={!privateMode}
           incognito={privateMode}
-          setSupportMultipleWindows={false}
+          setSupportMultipleWindows
           allowsFullscreenVideo
           mediaPlaybackRequiresUserAction
           injectedJavaScript={MEDIA_DETECTOR_SCRIPT}
@@ -299,13 +377,19 @@ export function BrowserScreen() {
           onLoadEnd={() => setLoading(false)}
           onError={(event: {nativeEvent: {description?: string}}) => {setLoading(false); setError(event.nativeEvent.description || 'Check your connection and try again.');}}
           onHttpError={(event: {nativeEvent: {statusCode: number}}) => {if (event.nativeEvent.statusCode >= 400) setError(`The website returned error ${event.nativeEvent.statusCode}.`);}}
+          onOpenWindow={(event: {nativeEvent: {targetUrl?: string}}) => {
+            const targetUrl = event.nativeEvent.targetUrl || '';
+            if (/^https?:\/\//i.test(targetUrl)) openNewTab(targetUrl, targetUrl);
+          }}
           onShouldStartLoadWithRequest={(request: {url: string; isTopFrame?: boolean}) => {
             const candidate = inferMediaFromUrl(request.url, active.url, pageTitle);
             if (candidate) addDetectedMedia(candidate);
             return true;
           }}
         />
-      )}
+      {error ? (
+        <View style={styles.errorState}><Globe2 color={colors.muted} size={38} /><Text style={styles.errorTitle}>Page could not be loaded</Text><Text style={styles.errorBody}>{error}</Text><Pressable onPress={() => {setError(undefined); webView.current?.reload();}} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View>
+      ) : null}
       {pageItems.length > 0 ? (
         <Pressable onPress={openDetectedMedia} style={styles.mediaFound}>
           <Download color={colors.white} size={18} />
@@ -321,7 +405,25 @@ export function BrowserScreen() {
         <Pressable onPress={() => setTabsVisible(true)} style={styles.tabCount}><Text style={styles.tabCountText}>{tabs.length}</Text></Pressable>
       </View>
       <QualitySheet visible={qualityVisible} items={pageItems} onClose={() => setQualityVisible(false)} onDownload={item => enqueueMedia(item, undefined, USER_AGENT)} />
-      <TabsModal visible={tabsVisible} tabs={tabs} activeId={activeId} onClose={() => setTabsVisible(false)} onNew={newTab} onSelect={id => {setActiveId(id); setTabsVisible(false);}} onRemove={closeTab} />
+      <TabsModal visible={tabsVisible} tabs={tabs} activeId={activeId} onClose={() => setTabsVisible(false)} onNew={newTab} onSelect={selectTab} onRemove={closeTab} />
+      {contextTarget ? (
+        <ContextMenu
+          target={contextTarget}
+          bookmarked={bookmarks.some(item => item.url === contextTarget.url)}
+          downloadable={Boolean(contextMedia)}
+          onClose={() => setContextTarget(undefined)}
+          onOpen={() => {const target = contextTarget; setContextTarget(undefined); navigate(target.url);}}
+          onNewTab={() => {const target = contextTarget; setContextTarget(undefined); openNewTab(target.url, target.title);}}
+          onCopy={() => {Clipboard.setString(contextTarget.url); setContextTarget(undefined);}}
+          onShare={() => {const target = contextTarget; setContextTarget(undefined); Share.share({message: target.url, title: target.title});}}
+          onBookmark={() => {const target = contextTarget; setContextTarget(undefined); toggleBookmark(target.title, target.url);}}
+          onDownload={() => {
+            if (!contextMedia) return;
+            setContextTarget(undefined);
+            enqueueMedia(contextMedia, undefined, USER_AGENT);
+          }}
+        />
+      ) : null}
     </View>
   );
 }
@@ -341,6 +443,47 @@ function TabsModal({visible, tabs, activeId, onClose, onNew, onSelect, onRemove}
 function ListModal({type, history, bookmarks, onClose, onOpen}: {type: 'history' | 'bookmarks' | null; history: ReturnType<typeof useApp>['history']; bookmarks: ReturnType<typeof useApp>['bookmarks']; onClose: () => void; onOpen: (url: string) => void}) {
   const items = type === 'history' ? history : bookmarks;
   return <Modal visible={Boolean(type)} animationType="slide" onRequestClose={onClose}><View style={styles.modalPage}><View style={styles.modalHeader}><Text style={styles.modalTitle}>{type === 'history' ? 'History' : 'Bookmarks'}</Text><Pressable onPress={onClose} style={styles.close}><X color={colors.ink} size={22} /></Pressable></View><SafeScrollView>{items.length === 0 ? <Text style={styles.emptyList}>Nothing saved here yet.</Text> : items.map(item => <Pressable key={item.id} onPress={() => onOpen(item.url)} style={styles.linkRow}><Globe2 color={colors.blue600} size={18} /><View style={styles.tabCopy}><Text numberOfLines={1} style={styles.tabTitle}>{item.title}</Text><Text numberOfLines={1} style={styles.tabUrl}>{item.url}</Text></View></Pressable>)}</SafeScrollView></View></Modal>;
+}
+
+function ContextMenu({target, bookmarked, downloadable, onClose, onOpen, onNewTab, onCopy, onShare, onBookmark, onDownload}: {
+  target: ContextTarget;
+  bookmarked: boolean;
+  downloadable: boolean;
+  onClose: () => void;
+  onOpen: () => void;
+  onNewTab: () => void;
+  onCopy: () => void;
+  onShare: () => void;
+  onBookmark: () => void;
+  onDownload: () => void;
+}) {
+  return (
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+      <View style={styles.contextOverlay}>
+        <Pressable accessibilityLabel="Close link menu" onPress={onClose} style={StyleSheet.absoluteFill} />
+        <View style={styles.contextSheet}>
+          <View style={styles.contextHeader}>
+            <View style={styles.contextIcon}><Globe2 color={colors.blue700} size={19} /></View>
+            <View style={styles.contextCopy}>
+              <Text numberOfLines={1} style={styles.contextTitle}>{target.title}</Text>
+              <Text numberOfLines={2} style={styles.contextUrl}>{target.url}</Text>
+            </View>
+            <Pressable accessibilityLabel="Close" onPress={onClose} style={styles.close}><X color={colors.ink} size={21} /></Pressable>
+          </View>
+          <ContextAction icon={<Globe2 color={colors.ink} size={20} />} label="Open" onPress={onOpen} />
+          <ContextAction icon={<Plus color={colors.ink} size={21} />} label="Open in new tab" onPress={onNewTab} />
+          {downloadable ? <ContextAction icon={<Download color={colors.blue700} size={20} />} label="Download media" onPress={onDownload} /> : null}
+          <ContextAction icon={<Copy color={colors.ink} size={20} />} label="Copy address" onPress={onCopy} />
+          <ContextAction icon={<Share2 color={colors.ink} size={20} />} label="Share" onPress={onShare} />
+          <ContextAction icon={<Bookmark color={colors.ink} size={20} />} label={bookmarked ? 'Remove bookmark' : 'Add bookmark'} onPress={onBookmark} last />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function ContextAction({icon, label, onPress, last = false}: {icon: React.ReactNode; label: string; onPress: () => void; last?: boolean}) {
+  return <Pressable accessibilityRole="button" onPress={onPress} style={[styles.contextAction, last && styles.contextActionLast]}>{icon}<Text style={styles.contextActionText}>{label}</Text></Pressable>;
 }
 
 const styles = StyleSheet.create({
@@ -377,7 +520,7 @@ const styles = StyleSheet.create({
   progressTrack: {height: 2, backgroundColor: colors.sky100},
   progressFill: {height: 2, backgroundColor: colors.blue600},
   webView: {flex: 1, backgroundColor: colors.white},
-  errorState: {flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32},
+  errorState: {position: 'absolute', top: 54, right: 0, bottom: 54, left: 0, zIndex: 3, alignItems: 'center', justifyContent: 'center', padding: 32, backgroundColor: colors.surface},
   errorTitle: {fontSize: 19, fontWeight: '800', color: colors.ink, marginTop: spacing.lg},
   errorBody: {fontSize: 14, lineHeight: 20, textAlign: 'center', color: colors.muted, marginTop: spacing.sm},
   retry: {marginTop: spacing.lg, backgroundColor: colors.blue700, borderRadius: radius.md, paddingHorizontal: 18, paddingVertical: 11},
@@ -403,4 +546,14 @@ const styles = StyleSheet.create({
   modalDone: {margin: spacing.lg, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.blue700},
   modalDoneText: {fontSize: 15, fontWeight: '800', color: colors.white},
   emptyList: {textAlign: 'center', color: colors.muted, marginTop: 60},
+  contextOverlay: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(3, 18, 38, 0.38)'},
+  contextSheet: {backgroundColor: colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: 28},
+  contextHeader: {flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingBottom: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line},
+  contextIcon: {width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.sky100},
+  contextCopy: {flex: 1},
+  contextTitle: {fontSize: 15, fontWeight: '800', color: colors.ink},
+  contextUrl: {fontSize: 11, lineHeight: 16, color: colors.muted, marginTop: 3},
+  contextAction: {height: 52, flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line},
+  contextActionLast: {borderBottomWidth: 0},
+  contextActionText: {fontSize: 15, fontWeight: '700', color: colors.ink},
 });
