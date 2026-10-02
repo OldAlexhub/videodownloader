@@ -1,7 +1,7 @@
-Version 1.0.2
+Version 1.0.3
 
 - Keep download and player controls clear of Android navigation controls
 - Improve download streaming efficiency and local video playback controls
-- Add optional, off-by-default aggregate search and visited-site insights
+- Enable aggregate search and visited-site insights by default, with separate Settings controls
 - Include top search terms and most visited domains in the protected server dashboard
 - Continue using the full downloader free with no account or subscription

@@ -113,5 +113,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   privateByDefault: false,
   destinationName: 'Video Downloader & Media Saver',
   analyticsEnabled: true,
-  usageInsightsEnabled: false,
+  usageInsightsEnabled: true,
 };

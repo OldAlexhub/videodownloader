@@ -136,7 +136,7 @@ Events can contain:
 - Media type, actual source quality, bytes, result, duration, and failure code
 - Ad format and placement impression events
 
-An additional Search & website insights setting is off by default. When users enable it, submitted browser search terms and visited website domains are sent for aggregate top-term and top-site reporting. Private sessions are excluded. Full visited URLs, paths, and query strings are never sent, and individual search and site values are hidden in the recent-event dashboard. Disabling the setting removes queued search and site events.
+Performance analytics and Search & website insights are on by default and can each be disabled in Settings. When both are enabled, submitted browser search terms and visited website domains are sent for aggregate top-term and top-site reporting. Private sessions are excluded. Full visited URLs, paths, and query strings are never sent, and individual search and site values are hidden in the recent-event dashboard. Disabling Search & website insights removes queued search and site events.
 
 The backend may derive approximate city and country from the request IP and then discards the IP without storing it. The app does not request Android location permission. Media bytes, cookies, authorization headers, browsing history, full source URLs, and page content are never included in analytics. Users can disable Performance analytics in Settings, which clears the pending analytics queue.
 
