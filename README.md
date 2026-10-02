@@ -125,7 +125,7 @@ Banners collapse after an error. Native ads are labeled Sponsored. Interstitials
 
 The analytics base URL is `https://vd.server.oldalexhub.com`. The app posts one JSON event at a time to `/v1/events` with a four-second connection and read timeout. A bounded local queue keeps at most 100 events. Failures never block browser, download, library, player, or ad flows.
 
-The production backend implementation is in the sibling [`server`](../server) repository. It includes the ingestion API, MongoDB event storage and retention indexes, local IP geolocation, authenticated reporting APIs, an admin dashboard, automated tests, Docker deployment files, and an Nginx configuration for `vd.server.oldalexhub.com`.
+The production backend implementation is in the sibling [`server`](../server) repository. It includes the ingestion API, PostgreSQL event storage and retention indexes, local IP geolocation, authenticated reporting APIs, an admin dashboard, automated tests, Docker deployment files, and an Nginx configuration for `vd.server.oldalexhub.com`.
 
 Events can contain:
 
