@@ -19,13 +19,18 @@ export function NativeSponsoredCard() {
 
   useEffect(() => {
     if (!adsReady) return;
+    downloadManager.trackEvent('ad_request', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
     let mounted = true;
     let loadedAd: NativeAd | null = null;
     NativeAd.createForAdRequest(adConfig.native, {requestNonPersonalizedAdsOnly: false})
       .then(ad => {
         loadedAd = ad;
+        downloadManager.trackEvent('ad_load', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
         ad.addAdEventListener(NativeAdEventType.IMPRESSION, () => {
           downloadManager.trackEvent('ad_impression', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
+        });
+        ad.addAdEventListener(NativeAdEventType.PAID, paid => {
+          downloadManager.trackEvent('ad_paid', {format: 'native', placement: 'browser_home', currency: paid.currency, micros: Number(paid.valueMicros || Math.round(paid.value * 1_000_000))}).catch(() => undefined);
         });
         if (mounted) {
           setNativeAd(ad);
@@ -33,7 +38,7 @@ export function NativeSponsoredCard() {
           ad.destroy();
         }
       })
-      .catch(() => undefined);
+      .catch(error => downloadManager.trackEvent('ad_failure', {format: 'native', placement: 'browser_home', errorCode: String(error?.code || 'unknown').replace(/[^a-z0-9_.-]/gi, '_')}).catch(() => undefined));
     return () => {
       mounted = false;
       loadedAd?.destroy();

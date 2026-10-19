@@ -31,7 +31,7 @@ export function AppShell({children}: PropsWithChildren) {
   }, [activeTab, setActiveTab]);
 
   return (
-    <View style={[styles.shell, {paddingTop: insets.top}]}>
+    <View style={[styles.shell, {paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right}]}>
       <View style={styles.content}>{children}</View>
       {showBanner ? <SafeAdContainer /> : null}
       <View style={[styles.bottomBar, {paddingBottom: insets.bottom}]}>

@@ -61,6 +61,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       if (database.activeCount() >= maxParallel) return@withContext Result.retry()
       database.update(id, ContentValues().apply {
         put("status", "preparing")
+        put("processing_stage", "probing")
         if (initial.startedAt == null) put("started_at", System.currentTimeMillis())
         putNull("failure_code")
         putNull("failure_message")
@@ -71,12 +72,12 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
     try {
       val record = database.get(id) ?: return@withContext Result.failure()
       val resultFile = when {
-        record.extension.equals("m3u8", true) || record.mimeType.contains("mpegurl", true) -> downloadHls(record)
-        record.extension.equals("mpd", true) || record.mimeType.contains("dash", true) -> downloadDash(record)
+        record.protocol == "hls" || record.extension.equals("m3u8", true) || record.mimeType.contains("mpegurl", true) -> downloadAdaptive(record, "hls")
+        record.protocol == "dash" || record.extension.equals("mpd", true) || record.mimeType.contains("dash", true) -> downloadAdaptive(record, "dash")
         else -> downloadHttp(record, record.sourceUrl)
       }
       ensureNotStopped()
-      database.update(id, ContentValues().apply { put("status", "processing") })
+      database.update(id, ContentValues().apply { put("status", "processing"); put("processing_stage", "saving") })
       setForeground(foregroundInfo(database.get(id) ?: record, 100, "Saving to device", false))
       val current = database.get(id) ?: record
       val hash = sha256(resultFile)
@@ -92,14 +93,15 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
         put("eta_seconds", 0)
         put("completed_at", System.currentTimeMillis())
         put("content_hash", hash)
+        put("processing_stage", "completed")
       })
       val finished = database.get(id) ?: current
       Telemetry.record(applicationContext, "download_completed", JSONObject().apply {
-        put("title", finished.title)
-        put("filename", finished.finalFilename)
         put("sourceHost", runCatching { Uri.parse(finished.sourceUrl).host }.getOrNull())
         put("mediaType", finished.mediaType)
-        put("quality", finished.qualityLabel.orEmpty())
+        put("protocol", finished.protocol)
+        put("stage", "completed")
+        put("flowId", finished.flowId)
         put("bytes", resultFile.length())
         put("durationMs", System.currentTimeMillis() - (finished.startedAt ?: finished.createdAt))
       })
@@ -186,6 +188,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       ?.takeIf { it.isNotBlank() } ?: responseMime?.let(::extensionForMime)
     database.update(id, ContentValues().apply {
       put("status", "downloading")
+      put("processing_stage", "downloading")
       put("supports_range", if (supports) 1 else 0)
       if (expected > 0) put("estimated_bytes", expected)
       responseEtag?.let { put("etag", it) }
@@ -206,10 +209,18 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
         var lastUpdate = System.currentTimeMillis()
         var lastBytes = existing
         var rollingSpeed = 0.0
+        var firstByteReported = existing > 0
         while (true) {
           ensureNotStopped()
           val count = input.read(buffer)
           if (count < 0) break
+          if (!firstByteReported) {
+            firstByteReported = true
+            Telemetry.record(applicationContext, "download_first_byte", JSONObject().apply {
+              put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull()); put("mediaType", record.mediaType)
+              put("protocol", record.protocol); put("stage", "downloading"); put("elapsedMs", System.currentTimeMillis() - (record.startedAt ?: record.createdAt)); put("flowId", record.flowId)
+            })
+          }
           output.write(buffer, 0, count)
           existing += count
           val now = System.currentTimeMillis()
@@ -229,6 +240,50 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       throw IOException("Connection ended before all bytes were received")
     }
     return target
+  }
+
+  private fun downloadAdaptive(record: DownloadRecord, protocol: String): File {
+    val manifest = fetchText(record.sourceUrl, record)
+    if (manifest.contains("ContentProtection", true) || (manifest.contains("#EXT-X-KEY", true) && !manifest.contains("METHOD=NONE", true))) {
+      throw DownloadFailure("protected_media", "Protected or encrypted media cannot be downloaded.")
+    }
+    if (protocol == "hls" && !manifest.contains("#EXT-X-STREAM-INF", true) && !manifest.contains("#EXT-X-ENDLIST", true)) {
+      throw DownloadFailure("live_stream", "Live streams cannot be saved reliably.")
+    }
+    if (protocol == "dash" && Regex("<MPD[^>]+type=[\"']dynamic[\"']", RegexOption.IGNORE_CASE).containsMatchIn(manifest)) {
+      throw DownloadFailure("live_stream", "Live streams cannot be saved reliably.")
+    }
+    database.update(id, ContentValues().apply {
+      put("status", "processing")
+      put("processing_stage", "combining")
+      put("mime_type", "video/mp4")
+      put("extension", "mp4")
+      put("final_filename", replaceExtension(record.finalFilename, "mp4"))
+    })
+    Telemetry.record(applicationContext, "download_combine_started", JSONObject().apply {
+      put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
+      put("mediaType", record.mediaType); put("protocol", protocol); put("stage", "combining"); put("flowId", record.flowId)
+    })
+    val output = partFile(applicationContext, id)
+    var firstByteReported = false
+    val exported = AdaptiveExporter.export(applicationContext, record, output, { isStopped }) { progress ->
+      if (progress > 0 && !firstByteReported) {
+        firstByteReported = true
+        Telemetry.record(applicationContext, "download_first_byte", JSONObject().apply {
+          put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull()); put("mediaType", record.mediaType)
+          put("protocol", protocol); put("stage", "combining"); put("elapsedMs", System.currentTimeMillis() - (record.startedAt ?: record.createdAt)); put("flowId", record.flowId)
+        })
+      }
+      database.update(id, ContentValues().apply { put("progress", progress.toDouble()); put("processing_stage", "combining") })
+    }
+    database.update(id, ContentValues().apply {
+      put("estimated_bytes", exported.length()); put("downloaded_bytes", exported.length()); put("progress", 100.0)
+    })
+    Telemetry.record(applicationContext, "download_combine_completed", JSONObject().apply {
+      put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
+      put("mediaType", record.mediaType); put("protocol", protocol); put("stage", "combining"); put("bytes", exported.length()); put("flowId", record.flowId)
+    })
+    return exported
   }
 
   private suspend fun downloadHls(record: DownloadRecord): File {
@@ -259,6 +314,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
     if (index == 0) target.delete()
     database.update(id, ContentValues().apply {
       put("status", "downloading")
+      put("processing_stage", "downloading")
       put("supports_range", 1)
       put("estimated_bytes", segments.size.toLong())
       put("downloaded_bytes", index.toLong())
@@ -386,6 +442,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       put("speed_bps", speed)
       put("eta_seconds", eta)
       put("status", "downloading")
+      put("processing_stage", "downloading")
     })
     setProgress(workDataOf("progress" to progress, "downloaded" to downloaded))
     setForeground(foregroundInfo(database.get(id) ?: return, progress.toInt(), "Downloading", false))
@@ -464,6 +521,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
     if (status == "paused" || status == "cancelled") return
     database.update(id, ContentValues().apply {
       put("status", "failed")
+      put("processing_stage", "failed")
       put("failure_code", code)
       put("failure_message", message)
       put("speed_bps", 0)
@@ -471,11 +529,11 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
     })
     database.get(id)?.let { record ->
       Telemetry.record(applicationContext, "download_failed", JSONObject().apply {
-        put("title", record.title)
-        put("filename", record.finalFilename)
         put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
         put("mediaType", record.mediaType)
-        put("quality", record.qualityLabel.orEmpty())
+        put("protocol", record.protocol)
+        put("stage", record.processingStage)
+        put("flowId", record.flowId)
         put("failureCode", code)
         put("downloadedBytes", record.downloadedBytes)
         put("durationMs", System.currentTimeMillis() - (record.startedAt ?: record.createdAt))

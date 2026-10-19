@@ -87,11 +87,14 @@ export function inferMediaFromUrl(
     mimeType,
     extension: manifest ? extension : extension || (mediaType === 'video' ? 'mp4' : mediaType === 'audio' ? 'mp3' : 'jpg'),
     mediaType,
+    protocol: extension === 'm3u8' ? 'hls' : extension === 'mpd' ? 'dash' : 'progressive',
+    container: extension ? extension.toUpperCase() : undefined,
+    audioMode: mediaType === 'audio' ? 'muxed' : mediaType === 'video' ? 'unknown' : 'none',
     qualityLabel: height ? `${height}p` : manifest ? 'Adaptive stream' : mediaType === 'audio' ? 'Audio' : 'Source',
     resolution: height ? `${height}p` : undefined,
     height,
     estimatedBytes: size || undefined,
-    hasAudio: mediaType !== 'image',
+    hasAudio: mediaType === 'audio' ? true : undefined,
     isManifest: manifest,
     confidence: contentType ? 90 : extension ? 70 : 40,
   };
@@ -135,7 +138,9 @@ export const MEDIA_DETECTOR_SCRIPT = `
 (function () {
   if (window.__VDMS_INSTALLED__) return true;
   window.__VDMS_INSTALLED__ = true;
-  const sent = new Set();
+  const sent = new Map();
+  const elementIds = new WeakMap();
+  let elementSequence = 0;
   if (navigator.requestMediaKeySystemAccess) {
     const originalMediaKeys = navigator.requestMediaKeySystemAccess.bind(navigator);
     navigator.requestMediaKeySystemAccess = function () {
@@ -144,8 +149,11 @@ export const MEDIA_DETECTOR_SCRIPT = `
     };
   }
   const emit = (url, meta) => {
-    if (!url || sent.has(url) || !/^https?:/i.test(url)) return;
-    sent.add(url);
+    if (!url || !/^https?:/i.test(url)) return;
+    const details = meta || {};
+    const signature = JSON.stringify([details.elementId || '', details.type || '', details.width || 0, details.height || 0, Math.round(details.duration || 0), details.active || false, details.poster || '']);
+    if (sent.get(url) === signature) return;
+    sent.set(url, signature);
     window.ReactNativeWebView.postMessage(JSON.stringify({type:'media', url:url, meta:meta || {}}));
   };
   let holdTimer = null;
@@ -213,8 +221,11 @@ export const MEDIA_DETECTOR_SCRIPT = `
   }, true);
   const inspect = () => {
     document.querySelectorAll('video,audio').forEach((node) => {
+      if (!elementIds.has(node)) elementIds.set(node, 'media-' + (++elementSequence));
       const rect = node.getBoundingClientRect();
       const meta = {
+        elementId: elementIds.get(node),
+        source: 'element',
         tag: node.tagName.toLowerCase(),
         title: node.getAttribute('title') || document.title,
         poster: node.getAttribute('poster') || '',
@@ -222,10 +233,10 @@ export const MEDIA_DETECTOR_SCRIPT = `
         height: node.videoHeight || Math.round(rect.height),
         duration: Number.isFinite(node.duration) ? node.duration : 0,
         active: !node.paused,
-        prominent: rect.width * rect.height > 90000
+        prominent: rect.width * rect.height > ((window.__VDMS_CONFIG__ && window.__VDMS_CONFIG__.minimumImagePixels) || 120000)
       };
       emit(node.currentSrc || node.src, meta);
-      node.querySelectorAll('source').forEach((source) => emit(source.src, {...meta, type:source.type || ''}));
+      node.querySelectorAll('source').forEach((source) => emit(source.src, {...meta, source:'source', type:source.type || ''}));
     });
   };
   const originalFetch = window.fetch;
@@ -237,7 +248,7 @@ export const MEDIA_DETECTOR_SCRIPT = `
       result.then((response) => {
         const type = response.headers.get('content-type') || '';
         if (/^(video|audio|image)\\//i.test(type) || /mpegurl|dash\\+xml/i.test(type)) {
-          emit(response.url || url, {type:type, contentLength:response.headers.get('content-length') || ''});
+          emit(response.url || url, {source:'fetch', type:type, contentLength:response.headers.get('content-length') || ''});
         }
       }).catch(() => {});
       return result;
@@ -253,15 +264,62 @@ export const MEDIA_DETECTOR_SCRIPT = `
     this.addEventListener('load', () => {
       const type = this.getResponseHeader('content-type') || '';
       if (/^(video|audio|image)\\//i.test(type) || /mpegurl|dash\\+xml/i.test(type)) {
-        emit(this.responseURL || this.__vdmsUrl, {type:type, contentLength:this.getResponseHeader('content-length') || ''});
+        emit(this.responseURL || this.__vdmsUrl, {source:'xhr', type:type, contentLength:this.getResponseHeader('content-length') || ''});
       }
     });
     return send.apply(this, arguments);
   };
-  new MutationObserver(inspect).observe(document.documentElement || document, {childList:true, subtree:true, attributes:true, attributeFilter:['src']});
-  document.addEventListener('loadedmetadata', inspect, true);
-  setInterval(inspect, 2500);
-  inspect();
+  const playback = new WeakMap();
+  const playbackState = (node) => {
+    let state = playback.get(node);
+    if (!state) {
+      state = {activeSince:0, watchedMs:0, pauses:0, seeks:0, buffers:0, lastSent:0};
+      playback.set(node, state);
+    }
+    return state;
+  };
+  const accruePlayback = (node) => {
+    const state = playbackState(node);
+    if (state.activeSince) {
+      state.watchedMs += Math.max(0, performance.now() - state.activeSince);
+      state.activeSince = 0;
+    }
+    return state;
+  };
+  const emitPlayback = (node, reason) => {
+    const state = accruePlayback(node);
+    if (!state.watchedMs && !state.pauses && !state.seeks && !state.buffers) return;
+    const now = Date.now();
+    if (reason === state.lastReason && now - state.lastSent < 750) return;
+    state.lastReason = reason;
+    state.lastSent = now;
+    const duration = Number.isFinite(node.duration) ? node.duration : 0;
+    window.ReactNativeWebView.postMessage(JSON.stringify({type:'webPlayback', summary:{
+      mediaType:node.tagName.toLowerCase(), durationMs:Math.round(duration * 1000), activeWatchedMs:Math.round(state.watchedMs),
+      completionPercent:duration > 0 ? Math.min(100, Math.round((node.currentTime / duration) * 100)) : 0,
+      pauseCount:state.pauses, seekCount:state.seeks, bufferCount:state.buffers, speed:node.playbackRate || 1, exitReason:reason
+    }}));
+  };
+  const instrumentPlayback = (node) => {
+    const state = playbackState(node);
+    if (state.instrumented) return;
+    state.instrumented = true;
+    node.addEventListener('playing', () => { const current = playbackState(node); if (!current.activeSince) current.activeSince = performance.now(); });
+    node.addEventListener('pause', () => { const current = accruePlayback(node); if (!node.ended) current.pauses++; emitPlayback(node, 'pause'); });
+    node.addEventListener('seeking', () => { playbackState(node).seeks++; });
+    node.addEventListener('waiting', () => { accruePlayback(node).buffers++; });
+    node.addEventListener('ended', () => emitPlayback(node, 'ended'));
+  };
+  const originalInspect = inspect;
+  const inspectAndInstrument = () => {
+    originalInspect();
+    document.querySelectorAll('video,audio').forEach(instrumentPlayback);
+  };
+  window.addEventListener('pagehide', () => document.querySelectorAll('video,audio').forEach(node => emitPlayback(node, 'navigation')));
+  new MutationObserver(inspectAndInstrument).observe(document.documentElement || document, {childList:true, subtree:true, attributes:true, attributeFilter:['src']});
+  document.addEventListener('loadedmetadata', inspectAndInstrument, true);
+  setInterval(inspectAndInstrument, 2500);
+  inspectAndInstrument();
   true;
 })();
 `;

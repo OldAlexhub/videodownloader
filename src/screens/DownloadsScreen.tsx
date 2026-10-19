@@ -4,7 +4,7 @@ import {Pause, Play, Share2, Trash2, Edit3, Info, XCircle} from 'lucide-react-na
 import {DownloadCard} from '../components/DownloadCard';
 import {EmptyState} from '../components/EmptyState';
 import {RenameDialog} from '../components/RenameDialog';
-import {SafeScrollView} from '../components/ScreenContainer';
+import {SafeBottomSheet, SafeScrollView} from '../components/ScreenContainer';
 import {SectionHeader} from '../components/SectionHeader';
 import {useApp} from '../context/AppContext';
 import {downloadManager} from '../native/DownloadManager';
@@ -83,7 +83,7 @@ export function DownloadsScreen() {
 
 function ActionSheet({item, onClose, onOpen, onShare, onRename, onDelete}: {item?: DownloadItem; onClose: () => void; onOpen: () => void; onShare: () => void; onRename: () => void; onDelete: () => void}) {
   const hasFile = item?.status === 'completed';
-  return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose}><Pressable onPress={onClose} style={styles.sheetBackdrop}><View style={styles.sheet} onStartShouldSetResponder={() => true}><Text numberOfLines={2} style={styles.sheetTitle}>{item?.finalFilename}</Text><SheetAction icon={<Play color={colors.blue700} />} label="Open or play" onPress={onOpen} disabled={!hasFile} /><SheetAction icon={<Share2 color={colors.blue700} />} label="Share" onPress={onShare} disabled={!hasFile} /><SheetAction icon={<Edit3 color={colors.blue700} />} label="Rename" onPress={onRename} disabled={!hasFile} /><SheetAction icon={<Info color={colors.blue700} />} label={hasFile ? `${formatBytes(item?.actualBytes)} · ${formatDate(item?.completedAt)}` : item?.status === 'cancelled' ? 'Cancelled' : 'Download failed'} onPress={() => undefined} disabled /><SheetAction icon={<Trash2 color={colors.danger} />} label={hasFile ? 'Delete file' : 'Remove download'} onPress={onDelete} danger /></View></Pressable></Modal>;
+  return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent><Pressable onPress={onClose} style={styles.sheetBackdrop}><SafeBottomSheet style={styles.sheet} onStartShouldSetResponder={() => true}><Text numberOfLines={2} style={styles.sheetTitle}>{item?.finalFilename}</Text><SheetAction icon={<Play color={colors.blue700} />} label="Open or play" onPress={onOpen} disabled={!hasFile} /><SheetAction icon={<Share2 color={colors.blue700} />} label="Share" onPress={onShare} disabled={!hasFile} /><SheetAction icon={<Edit3 color={colors.blue700} />} label="Rename" onPress={onRename} disabled={!hasFile} /><SheetAction icon={<Info color={colors.blue700} />} label={hasFile ? `${formatBytes(item?.actualBytes)} · ${formatDate(item?.completedAt)}` : item?.status === 'cancelled' ? 'Cancelled' : 'Download failed'} onPress={() => undefined} disabled /><SheetAction icon={<Trash2 color={colors.danger} />} label={hasFile ? 'Delete file' : 'Remove download'} onPress={onDelete} danger /></SafeBottomSheet></Pressable></Modal>;
 }
 
 function SheetAction({icon, label, onPress, danger, disabled}: {icon: React.ReactNode; label: string; onPress: () => void; danger?: boolean; disabled?: boolean}) {
@@ -96,10 +96,10 @@ const styles = StyleSheet.create({
   title: {fontSize: 25, fontWeight: '900', color: colors.ink},
   subtitle: {fontSize: 12, color: colors.muted, marginTop: 4},
   bulkRow: {flexDirection: 'row', gap: 7, marginBottom: spacing.md},
-  bulkButton: {flex: 1, minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, borderRadius: radius.md},
+  bulkButton: {flex: 1, minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, borderRadius: radius.md},
   bulkText: {fontSize: 11, fontWeight: '800', color: colors.blue700},
   sheetBackdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(3,16,43,0.5)'},
-  sheet: {backgroundColor: colors.white, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 30},
+  sheet: {backgroundColor: colors.white, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg},
   sheetTitle: {fontSize: 16, lineHeight: 22, fontWeight: '900', color: colors.ink, padding: spacing.sm, marginBottom: spacing.sm},
   sheetAction: {minHeight: 52, flexDirection: 'row', gap: spacing.md, alignItems: 'center', paddingHorizontal: spacing.md},
   sheetActionText: {fontSize: 15, fontWeight: '700', color: colors.ink},

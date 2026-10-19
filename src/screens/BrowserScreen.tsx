@@ -1,5 +1,5 @@
 import Clipboard from '@react-native-clipboard/clipboard';
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   Alert,
   BackHandler,
@@ -33,11 +33,13 @@ import {
 import {WebView, WebViewMessageEvent, WebViewNavigation} from 'react-native-webview';
 import {NativeSponsoredCard} from '../ads/NativeSponsoredCard';
 import {QualitySheet} from '../components/QualitySheet';
-import {SafeScrollView} from '../components/ScreenContainer';
+import {SafeBottomSheet, SafeModalScreen, SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {colors, radius, spacing} from '../theme';
 import {inferMediaFromUrl, MEDIA_DETECTOR_SCRIPT, normalizeAddress, submittedSearchTerm, WEBSITE_AD_BLOCKER_SCRIPT} from '../utils/browser';
 import {downloadManager} from '../native/DownloadManager';
+import {remoteConfig} from '../native/RemoteConfig';
+import {assetCountLabel, groupMedia, variantUsable} from '../utils/media';
 
 interface BrowserTab {
   id: string;
@@ -52,7 +54,7 @@ interface ContextTarget {
 }
 
 const HOME = '';
-const USER_AGENT = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Mobile Safari/537.36 VDMediaSaver/1.0.4';
+const USER_AGENT = 'Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Mobile Safari/537.36 VDMediaSaver/2.0.0';
 
 export function BrowserScreen() {
   const webView = useRef<any>(null);
@@ -65,13 +67,14 @@ export function BrowserScreen() {
     detectedMedia,
     addDetectedMedia,
     clearDetectedMedia,
-    enqueueMedia,
+    enqueueSelections,
     history,
     addHistory,
     toggleBookmark,
     settings,
     activeTab,
     setActiveTab,
+    updateSettings,
   } = useApp();
   const browserResetKeyRef = useRef(browserResetKey);
   const blockerSetting = useRef(settings.blockWebsiteAds);
@@ -90,9 +93,33 @@ export function BrowserScreen() {
   const [libraryVisible, setLibraryVisible] = useState<'history' | 'bookmarks' | null>(null);
   const [contextTarget, setContextTarget] = useState<ContextTarget>();
   const [error, setError] = useState<string>();
+  const documentSequence = useRef(0);
+  const initialDocumentId = 'initial:0';
+  const [documentId, setDocumentId] = useState(initialDocumentId);
+  const documentIdRef = useRef(initialDocumentId);
+  const inspectedManifests = useRef(new Set<string>());
+  const inspectedCandidates = useRef(new Set<string>());
+  const lastStartedUrl = useRef('');
+  const [scanningCount, setScanningCount] = useState(0);
+  const scanStartedAt = useRef(0);
+  const completedScanDocument = useRef('');
+  const detectorBootstrap = `window.__VDMS_CONFIG__=${JSON.stringify({minimumImagePixels: remoteConfig.current().detector.minimumImagePixels})};true;`;
   const injectedScript = settings.blockWebsiteAds
-    ? `${WEBSITE_AD_BLOCKER_SCRIPT}\n${MEDIA_DETECTOR_SCRIPT}`
-    : MEDIA_DETECTOR_SCRIPT;
+    ? `${detectorBootstrap}\n${WEBSITE_AD_BLOCKER_SCRIPT}\n${MEDIA_DETECTOR_SCRIPT}`
+    : `${detectorBootstrap}\n${MEDIA_DETECTOR_SCRIPT}`;
+
+  const startDocument = useCallback((tabId = activeId) => {
+    documentSequence.current += 1;
+    const nextDocumentId = `${tabId}:${documentSequence.current}`;
+    documentIdRef.current = nextDocumentId;
+    setDocumentId(nextDocumentId);
+    inspectedManifests.current.clear();
+    inspectedCandidates.current.clear();
+    setScanningCount(0);
+    scanStartedAt.current = 0;
+    completedScanDocument.current = '';
+    clearDetectedMedia();
+  }, [activeId, clearDetectedMedia]);
 
   useEffect(() => {
     if (!browserTarget) {
@@ -152,7 +179,7 @@ export function BrowserScreen() {
       return;
     }
     setError(undefined);
-    clearDetectedMedia();
+    startDocument();
     setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: nextUrl} : tab));
     setAddress(nextUrl);
   };
@@ -205,6 +232,26 @@ export function BrowserScreen() {
         }
         return;
       }
+      if (payload.type === 'webPlayback') {
+        if (!privateMode && settings.analyticsEnabled) {
+          let sourceDomain = '';
+          try { sourceDomain = new URL(active.url).hostname.toLowerCase(); } catch { /* Ignore invalid page URLs. */ }
+          const summary = payload.summary || {};
+          downloadManager.trackEvent('web_playback_summary', {
+            sourceDomain,
+            mediaType: String(summary.mediaType || 'video'),
+            durationMs: Number(summary.durationMs) || 0,
+            activeWatchedMs: Number(summary.activeWatchedMs) || 0,
+            completionPercent: Number(summary.completionPercent) || 0,
+            pauseCount: Number(summary.pauseCount) || 0,
+            seekCount: Number(summary.seekCount) || 0,
+            bufferCount: Number(summary.bufferCount) || 0,
+            speed: Number(summary.speed) || 1,
+            exitReason: String(summary.exitReason || 'unknown'),
+          }).catch(() => undefined);
+        }
+        return;
+      }
       if (payload.type !== 'media') {
         return;
       }
@@ -213,23 +260,91 @@ export function BrowserScreen() {
       if (payload.meta?.contentLength) headers['content-length'] = payload.meta.contentLength;
       const found = inferMediaFromUrl(payload.url, active.url, payload.meta?.title || pageTitle, headers);
       if (found) {
+        if (!scanStartedAt.current) {
+          scanStartedAt.current = Date.now();
+          if (!privateMode && settings.analyticsEnabled) {
+            let sourceDomain = '';
+            try { sourceDomain = new URL(active.url).hostname.toLowerCase(); } catch { /* Ignore invalid URLs. */ }
+            downloadManager.trackEvent('scan_started', {sourceDomain}).catch(() => undefined);
+          }
+        }
+        const candidateDocumentId = documentIdRef.current;
+        const elementId = String(payload.meta?.elementId || '').slice(0, 120);
+        const relationship = String(payload.meta?.manifestParent || payload.meta?.poster || '').slice(0, 240);
+        const assetId = elementId
+          ? `${candidateDocumentId}:element:${elementId}`
+          : found.isManifest
+            ? `${candidateDocumentId}:manifest:${found.sourceUrl.split('?')[0]}`
+            : `${candidateDocumentId}:source:${found.sourceUrl.split('?')[0]}`;
         const enriched = {
           ...found,
+          candidateKey: `${candidateDocumentId}:${found.sourceUrl}`,
+          assetId,
+          groupKey: `${assetId}:${relationship}`,
+          documentId: candidateDocumentId,
           width: Number(payload.meta?.width) || found.width,
           height: Number(payload.meta?.height) || found.height,
           resolution: payload.meta?.height ? `${payload.meta.height}p` : found.resolution,
           qualityLabel: payload.meta?.height ? `${payload.meta.height}p` : found.qualityLabel,
           thumbnailUrl: payload.meta?.poster || undefined,
+          durationMs: Number(payload.meta?.duration) > 0 ? Math.round(Number(payload.meta.duration) * 1000) : found.durationMs,
+          audioMode: payload.meta?.muted ? 'none' as const : found.audioMode,
+          detectionSource: (payload.meta?.source || (found.isManifest ? 'manifest' : 'element')) as typeof found.detectionSource,
+          inspectionState: found.isManifest ? 'probing' as const : 'ready' as const,
           confidence: found.confidence + (payload.meta?.active ? 20 : 0) + (payload.meta?.prominent ? 10 : 0),
         };
         if (found.isManifest) {
+          const manifestKey = `${candidateDocumentId}:${found.sourceUrl}`;
+          if (inspectedManifests.current.has(manifestKey)) return;
+          inspectedManifests.current.add(manifestKey);
+          addDetectedMedia(enriched);
+          setScanningCount(count => count + 1);
           downloadManager.inspectManifest(found.sourceUrl, active.url, enriched.title)
-            .then(items => items.forEach(addDetectedMedia))
+            .then(items => {
+              if (candidateDocumentId !== documentIdRef.current) return;
+              items.forEach((item, index) => addDetectedMedia({
+                ...item,
+                candidateKey: index === 0 ? enriched.candidateKey : `${manifestKey}:variant:${item.selectionToken || index}`,
+                assetId,
+                groupKey: assetId,
+                documentId: candidateDocumentId,
+                detectionSource: 'manifest',
+                inspectionState: 'ready',
+              }));
+            })
             .catch(manifestError => {
-              if (String(manifestError).includes('Protected')) addDetectedMedia({...enriched, isProtected: true});
-              else addDetectedMedia(enriched);
+              if (candidateDocumentId !== documentIdRef.current) return;
+              const message = String(manifestError);
+              addDetectedMedia({
+                ...enriched,
+                inspectionState: 'unsupported',
+                isProtected: /protected|drm|encrypted/i.test(message),
+                supportState: 'unsupported',
+                unsupportedReason: /live/i.test(message) ? 'Live streams are not supported' : /protected|drm|encrypted/i.test(message) ? 'Protected media is not supported' : 'This stream could not be inspected',
+              });
+            })
+            .finally(() => {
+              if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
             });
-        } else addDetectedMedia(enriched);
+        } else {
+          const probeKey = `${candidateDocumentId}:${found.sourceUrl}`;
+          if (inspectedCandidates.current.has(probeKey)) {
+            addDetectedMedia(enriched);
+            return;
+          }
+          inspectedCandidates.current.add(probeKey);
+          addDetectedMedia({...enriched, inspectionState: 'probing'});
+          setScanningCount(count => count + 1);
+          downloadManager.inspectCandidates([enriched]).then(results => {
+            if (candidateDocumentId !== documentIdRef.current) return;
+            const probed = results[0];
+            addDetectedMedia(probed ? {...enriched, ...probed} : {...enriched, inspectionState: 'ready'});
+          }).catch(() => {
+            if (candidateDocumentId === documentIdRef.current) addDetectedMedia({...enriched, inspectionState: 'ready'});
+          }).finally(() => {
+            if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
+          });
+        }
       }
     } catch {
       return;
@@ -246,7 +361,7 @@ export function BrowserScreen() {
     setCanGoForward(false);
     setError(undefined);
     setTabsVisible(false);
-    clearDetectedMedia();
+    startDocument(id);
   };
 
   const newTab = () => openNewTab();
@@ -256,7 +371,7 @@ export function BrowserScreen() {
       setCanGoBack(false);
       setCanGoForward(false);
       setError(undefined);
-      clearDetectedMedia();
+      startDocument(id);
     }
     setTabs(current => {
       const remaining = current.filter(tab => tab.id !== id);
@@ -278,14 +393,30 @@ export function BrowserScreen() {
     setCanGoForward(false);
     setError(undefined);
     setTabsVisible(false);
-    clearDetectedMedia();
+    startDocument(id);
   };
 
-  const pageItems = useMemo(() => detectedMedia.filter(item => item.pageUrl === active.url || detectedMedia.length === 1), [active.url, detectedMedia]);
+  const pageItems = useMemo(() => detectedMedia.filter(item => item.documentId === documentId), [detectedMedia, documentId]);
+  const pageAssets = useMemo(() => groupMedia(pageItems, documentId), [documentId, pageItems]);
   const saved = bookmarks.some(item => item.url === active.url);
   const contextMedia = useMemo(() => contextTarget
     ? inferMediaFromUrl(contextTarget.url, active.url, contextTarget.title || pageTitle)
     : null, [active.url, contextTarget, pageTitle]);
+
+  useEffect(() => {
+    if (scanningCount !== 0 || !scanStartedAt.current || pageAssets.length === 0 || completedScanDocument.current === documentId) return;
+    completedScanDocument.current = documentId;
+    if (privateMode || !settings.analyticsEnabled) return;
+    let sourceDomain = '';
+    try { sourceDomain = new URL(active.url).hostname.toLowerCase(); } catch { /* Ignore invalid URLs. */ }
+    downloadManager.trackEvent('scan_completed', {
+      sourceDomain,
+      assetCount: pageAssets.length,
+      variantCount: pageItems.filter(variantUsable).length,
+      rejectedCount: pageItems.filter(item => !variantUsable(item) && item.inspectionState !== 'probing').length,
+      inspectionLatencyMs: Date.now() - scanStartedAt.current,
+    }).catch(() => undefined);
+  }, [active.url, documentId, pageAssets, pageItems, privateMode, scanningCount, settings.analyticsEnabled]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -319,28 +450,17 @@ export function BrowserScreen() {
         setCanGoBack(false);
         setCanGoForward(false);
         setError(undefined);
-        clearDetectedMedia();
+        startDocument();
         return true;
       }
       return false;
     });
     return () => subscription.remove();
-  }, [active.url, activeId, activeTab, canGoBack, clearDetectedMedia, contextTarget, libraryVisible, qualityVisible, tabsVisible]);
+  }, [active.url, activeId, activeTab, canGoBack, contextTarget, libraryVisible, qualityVisible, startDocument, tabsVisible]);
 
   const openDetectedMedia = () => {
-    if (settings.defaultQuality === 'ask') {
-      setQualityVisible(true);
-      return;
-    }
-    const usable = pageItems.filter(item => !item.isProtected);
-    const sorted = [...usable].sort((a, b) => (b.height || 0) - (a.height || 0) || (b.estimatedBytes || 0) - (a.estimatedBytes || 0));
-    const chosen = settings.defaultQuality === 'best'
-      ? sorted[0]
-      : settings.defaultQuality === 'smallest'
-        ? sorted[sorted.length - 1]
-        : usable.find(item => item.height === 720) || sorted.find(item => (item.height || 0) <= 1080) || sorted[Math.floor(sorted.length / 2)];
-    if (chosen) enqueueMedia(chosen, undefined, USER_AGENT);
-    else setQualityVisible(true);
+    if (!privateMode && settings.analyticsEnabled) downloadManager.trackEvent('picker_opened', {assetCount: pageAssets.length, variantCount: pageItems.filter(variantUsable).length}).catch(() => undefined);
+    setQualityVisible(true);
   };
 
   if (!active.url) {
@@ -354,7 +474,7 @@ export function BrowserScreen() {
               <ShieldCheck color={privateMode ? colors.white : colors.blue700} size={19} />
             </Pressable>
           </View>
-          {privateMode ? <View style={styles.privateNotice}><LockKeyhole color={colors.success} size={17} /><Text style={styles.privateNoticeText}>Private session. Pages visited here are not added to local history.</Text></View> : null}
+          {privateMode ? <View style={styles.privateNotice}><LockKeyhole color={colors.success} size={17} /><Text style={styles.privateNoticeText}>Private session. History and browser analytics are not recorded.</Text></View> : null}
           <View style={styles.homeSearch}>
             <Search color={colors.muted} size={20} />
             <TextInput
@@ -437,7 +557,15 @@ export function BrowserScreen() {
           injectedJavaScript={injectedScript}
           onMessage={handleMessage}
           onNavigationStateChange={updateNavigation}
-          onLoadStart={() => {setLoading(true); setError(undefined);}}
+          onLoadStart={(event: {nativeEvent: {url?: string}}) => {
+            const startedUrl = event.nativeEvent.url || active.url;
+            if (startedUrl !== lastStartedUrl.current) {
+              lastStartedUrl.current = startedUrl;
+              startDocument();
+            }
+            setLoading(true);
+            setError(undefined);
+          }}
           onLoadProgress={(event: {nativeEvent: {progress: number}}) => setProgress(event.nativeEvent.progress)}
           onLoadEnd={() => setLoading(false)}
           onError={(event: {nativeEvent: {description?: string}}) => {setLoading(false); setError(event.nativeEvent.description || 'Check your connection and try again.');}}
@@ -448,28 +576,90 @@ export function BrowserScreen() {
           }}
           onShouldStartLoadWithRequest={(request: {url: string; isTopFrame?: boolean}) => {
             const candidate = inferMediaFromUrl(request.url, active.url, pageTitle);
-            if (candidate) addDetectedMedia(candidate);
+            if (candidate) {
+              const candidateDocumentId = documentIdRef.current;
+              const scopedAssetId = `${candidateDocumentId}:navigation:${candidate.sourceUrl.split('?')[0]}`;
+              const scoped = {
+                ...candidate,
+                candidateKey: `${candidateDocumentId}:${candidate.sourceUrl}`,
+                assetId: scopedAssetId,
+                groupKey: scopedAssetId,
+                documentId: candidateDocumentId,
+                detectionSource: 'navigation',
+                inspectionState: 'probing',
+              } as const;
+              addDetectedMedia(scoped);
+              const inspectionKey = `${candidateDocumentId}:${candidate.sourceUrl}`;
+              if (candidate.isManifest && !inspectedManifests.current.has(inspectionKey)) {
+                inspectedManifests.current.add(inspectionKey);
+                setScanningCount(count => count + 1);
+                downloadManager.inspectManifest(candidate.sourceUrl, active.url, pageTitle).then(items => {
+                  if (candidateDocumentId !== documentIdRef.current) return;
+                  items.forEach((item, index) => addDetectedMedia({...item, candidateKey: index === 0 ? scoped.candidateKey : `${inspectionKey}:variant:${item.selectionToken || index}`, assetId: scopedAssetId, groupKey: scopedAssetId, documentId: candidateDocumentId, detectionSource: 'manifest', inspectionState: 'ready'}));
+                }).catch(manifestFailure => {
+                  if (candidateDocumentId === documentIdRef.current) addDetectedMedia({...scoped, inspectionState: 'unsupported', supportState: 'unsupported', unsupportedReason: /live/i.test(String(manifestFailure)) ? 'Live streams are not supported' : /protected|drm|encrypted/i.test(String(manifestFailure)) ? 'Protected media is not supported' : 'This stream could not be inspected'});
+                }).finally(() => {
+                  if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
+                });
+              } else if (!candidate.isManifest && !inspectedCandidates.current.has(inspectionKey)) {
+                inspectedCandidates.current.add(inspectionKey);
+                setScanningCount(count => count + 1);
+                downloadManager.inspectCandidates([scoped]).then(results => {
+                  if (candidateDocumentId === documentIdRef.current) addDetectedMedia(results[0] ? {...scoped, ...results[0]} : scoped);
+                }).finally(() => {
+                  if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
+                });
+              }
+            }
             return true;
           }}
         />
       {error ? (
         <View style={styles.errorState}><Globe2 color={colors.muted} size={38} /><Text style={styles.errorTitle}>Page could not be loaded</Text><Text style={styles.errorBody}>{error}</Text><Pressable onPress={() => {setError(undefined); webView.current?.reload();}} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View>
       ) : null}
-      {pageItems.length > 0 ? (
+      {pageAssets.length > 0 || scanningCount > 0 ? (
         <Pressable onPress={openDetectedMedia} style={styles.mediaFound}>
           <Download color={colors.white} size={18} />
-          <Text style={styles.mediaFoundText}>Media found · {pageItems.length}</Text>
+          <Text style={styles.mediaFoundText}>{scanningCount > 0 ? 'Scanning media…' : `${assetCountLabel(pageAssets)} · ${pageItems.filter(variantUsable).length} quality options`}</Text>
         </Pressable>
       ) : null}
       <View style={styles.webToolbar}>
         <Pressable disabled={!canGoBack} onPress={() => webView.current?.goBack()} style={styles.webAction}><ArrowLeft color={canGoBack ? colors.ink : '#B8C3D1'} size={21} /></Pressable>
         <Pressable disabled={!canGoForward} onPress={() => webView.current?.goForward()} style={styles.webAction}><ArrowRight color={canGoForward ? colors.ink : '#B8C3D1'} size={21} /></Pressable>
-        <Pressable onPress={() => {setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: HOME, title: 'New tab'} : tab)); setAddress(''); clearDetectedMedia();}} style={styles.webAction}><Home color={colors.ink} size={21} /></Pressable>
+        <Pressable onPress={() => {setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: HOME, title: 'New tab'} : tab)); setAddress(''); startDocument();}} style={styles.webAction}><Home color={colors.ink} size={21} /></Pressable>
         <Pressable onPress={() => toggleBookmark(pageTitle, active.url)} style={styles.webAction}><Bookmark color={saved ? colors.blue700 : colors.ink} fill={saved ? colors.blue700 : 'transparent'} size={21} /></Pressable>
         <Pressable onPress={() => Share.share({message: active.url, title: pageTitle})} style={styles.webAction}><Share2 color={colors.ink} size={21} /></Pressable>
         <Pressable onPress={() => setTabsVisible(true)} style={styles.tabCount}><Text style={styles.tabCountText}>{tabs.length}</Text></Pressable>
       </View>
-      <QualitySheet visible={qualityVisible} items={pageItems} onClose={() => setQualityVisible(false)} onDownload={item => enqueueMedia(item, undefined, USER_AGENT)} />
+      <QualitySheet
+        visible={qualityVisible}
+        assets={pageAssets}
+        preferredQuality={settings.preferredQuality}
+        destinationName={settings.destinationName}
+        onChooseDestination={async () => {
+          const destination = await downloadManager.chooseDestination();
+          if (destination) updateSettings({destinationUri: destination.uri, destinationName: destination.name});
+        }}
+        onClose={() => setQualityVisible(false)}
+        onIncorrect={() => {
+          if (!privateMode && settings.analyticsEnabled) downloadManager.trackEvent('media_result_incorrect', {
+            assetCount: pageAssets.length,
+            variantCount: pageItems.length,
+            detectorVersion: '2.0',
+          }).catch(() => undefined);
+          Alert.alert('Feedback noted', privateMode || !settings.analyticsEnabled ? 'Nothing was sent because analytics is off for this session.' : 'Anonymous detector details were queued. No page or media URL was included.');
+        }}
+        onVariantSelected={variant => {
+          if (!privateMode && settings.analyticsEnabled) downloadManager.trackEvent('variant_selected', {
+            protocol: variant.protocol || 'progressive',
+            height: variant.height || 0,
+            bitrate: variant.bitrate || 0,
+            audioMode: variant.audioMode || 'unknown',
+            preset: settings.preferredQuality,
+          }).catch(() => undefined);
+        }}
+        onDownload={selections => enqueueSelections(selections, USER_AGENT)}
+      />
       <TabsModal visible={tabsVisible} tabs={tabs} activeId={activeId} onClose={() => setTabsVisible(false)} onNew={newTab} onSelect={selectTab} onRemove={closeTab} />
       {contextTarget ? (
         <ContextMenu
@@ -485,7 +675,33 @@ export function BrowserScreen() {
           onDownload={() => {
             if (!contextMedia) return;
             setContextTarget(undefined);
-            enqueueMedia(contextMedia, undefined, USER_AGENT);
+            const candidateDocumentId = documentIdRef.current;
+            const scopedAssetId = `${candidateDocumentId}:context:${contextMedia.sourceUrl.split('?')[0]}`;
+            const scoped = {
+              ...contextMedia,
+              candidateKey: `${candidateDocumentId}:${contextMedia.sourceUrl}`,
+              assetId: scopedAssetId,
+              groupKey: scopedAssetId,
+              documentId: candidateDocumentId,
+              detectionSource: 'link',
+              inspectionState: 'probing',
+            } as const;
+            addDetectedMedia(scoped);
+            setQualityVisible(true);
+            setScanningCount(count => count + 1);
+            const inspection = contextMedia.isManifest
+              ? downloadManager.inspectManifest(contextMedia.sourceUrl, active.url, contextMedia.title).then(items => {
+                if (candidateDocumentId !== documentIdRef.current) return;
+                items.forEach((item, index) => addDetectedMedia({...item, candidateKey: index === 0 ? scoped.candidateKey : `${scoped.candidateKey}:variant:${item.selectionToken || index}`, assetId: scopedAssetId, groupKey: scopedAssetId, documentId: candidateDocumentId, detectionSource: 'manifest', inspectionState: 'ready'}));
+              })
+              : downloadManager.inspectCandidates([scoped]).then(items => {
+                if (candidateDocumentId === documentIdRef.current) addDetectedMedia(items[0] ? {...scoped, ...items[0]} : {...scoped, inspectionState: 'ready'});
+              });
+            inspection.catch(inspectionFailure => {
+              if (candidateDocumentId === documentIdRef.current) addDetectedMedia({...scoped, inspectionState: 'unsupported', supportState: 'unsupported', unsupportedReason: /live/i.test(String(inspectionFailure)) ? 'Live streams are not supported' : /protected|drm|encrypted/i.test(String(inspectionFailure)) ? 'Protected media is not supported' : 'This media could not be inspected'});
+            }).finally(() => {
+              if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
+            });
           }}
         />
       ) : null}
@@ -502,12 +718,12 @@ function BrowserToolbar({tabs, onTabs, onNew}: {tabs: number; onTabs: () => void
 }
 
 function TabsModal({visible, tabs, activeId, onClose, onNew, onSelect, onRemove}: {visible: boolean; tabs: BrowserTab[]; activeId: string; onClose: () => void; onNew: () => void; onSelect: (id: string) => void; onRemove: (id: string) => void}) {
-  return <Modal visible={visible} animationType="slide" onRequestClose={onClose}><View style={styles.modalPage}><View style={styles.modalHeader}><Text style={styles.modalTitle}>Open tabs</Text><Pressable onPress={onNew} style={styles.modalNew}><Plus color={colors.white} size={18} /><Text style={styles.modalNewText}>New tab</Text></Pressable></View><SafeScrollView>{tabs.map(tab => <Pressable key={tab.id} onPress={() => onSelect(tab.id)} style={[styles.tabCard, tab.id === activeId && styles.tabCardActive]}><Globe2 color={colors.blue700} size={20} /><View style={styles.tabCopy}><Text numberOfLines={1} style={styles.tabTitle}>{tab.title}</Text><Text numberOfLines={1} style={styles.tabUrl}>{tab.url || 'New tab'}</Text></View><Pressable accessibilityLabel="Close tab" onPress={() => onRemove(tab.id)} style={styles.closeTab}><X color={colors.muted} size={19} /></Pressable></Pressable>)}</SafeScrollView><Pressable onPress={onClose} style={styles.modalDone}><Text style={styles.modalDoneText}>Done</Text></Pressable></View></Modal>;
+  return <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent><SafeModalScreen style={styles.modalPage}><View style={styles.modalHeader}><Text style={styles.modalTitle}>Open tabs</Text><Pressable onPress={onNew} style={styles.modalNew}><Plus color={colors.white} size={18} /><Text style={styles.modalNewText}>New tab</Text></Pressable></View><SafeScrollView>{tabs.map(tab => <Pressable key={tab.id} onPress={() => onSelect(tab.id)} style={[styles.tabCard, tab.id === activeId && styles.tabCardActive]}><Globe2 color={colors.blue700} size={20} /><View style={styles.tabCopy}><Text numberOfLines={1} style={styles.tabTitle}>{tab.title}</Text><Text numberOfLines={1} style={styles.tabUrl}>{tab.url || 'New tab'}</Text></View><Pressable accessibilityLabel="Close tab" onPress={() => onRemove(tab.id)} style={styles.closeTab}><X color={colors.muted} size={19} /></Pressable></Pressable>)}</SafeScrollView><Pressable onPress={onClose} style={styles.modalDone}><Text style={styles.modalDoneText}>Done</Text></Pressable></SafeModalScreen></Modal>;
 }
 
 function ListModal({type, history, bookmarks, onClose, onOpen}: {type: 'history' | 'bookmarks' | null; history: ReturnType<typeof useApp>['history']; bookmarks: ReturnType<typeof useApp>['bookmarks']; onClose: () => void; onOpen: (url: string) => void}) {
   const items = type === 'history' ? history : bookmarks;
-  return <Modal visible={Boolean(type)} animationType="slide" onRequestClose={onClose}><View style={styles.modalPage}><View style={styles.modalHeader}><Text style={styles.modalTitle}>{type === 'history' ? 'History' : 'Bookmarks'}</Text><Pressable onPress={onClose} style={styles.close}><X color={colors.ink} size={22} /></Pressable></View><SafeScrollView>{items.length === 0 ? <Text style={styles.emptyList}>Nothing saved here yet.</Text> : items.map(item => <Pressable key={item.id} onPress={() => onOpen(item.url)} style={styles.linkRow}><Globe2 color={colors.blue600} size={18} /><View style={styles.tabCopy}><Text numberOfLines={1} style={styles.tabTitle}>{item.title}</Text><Text numberOfLines={1} style={styles.tabUrl}>{item.url}</Text></View></Pressable>)}</SafeScrollView></View></Modal>;
+  return <Modal visible={Boolean(type)} animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent><SafeModalScreen style={styles.modalPage}><View style={styles.modalHeader}><Text style={styles.modalTitle}>{type === 'history' ? 'History' : 'Bookmarks'}</Text><Pressable onPress={onClose} style={styles.close}><X color={colors.ink} size={22} /></Pressable></View><SafeScrollView>{items.length === 0 ? <Text style={styles.emptyList}>Nothing saved here yet.</Text> : items.map(item => <Pressable key={item.id} onPress={() => onOpen(item.url)} style={styles.linkRow}><Globe2 color={colors.blue600} size={18} /><View style={styles.tabCopy}><Text numberOfLines={1} style={styles.tabTitle}>{item.title}</Text><Text numberOfLines={1} style={styles.tabUrl}>{item.url}</Text></View></Pressable>)}</SafeScrollView></SafeModalScreen></Modal>;
 }
 
 function ContextMenu({target, bookmarked, downloadable, onClose, onOpen, onNewTab, onCopy, onShare, onBookmark, onDownload}: {
@@ -523,10 +739,10 @@ function ContextMenu({target, bookmarked, downloadable, onClose, onOpen, onNewTa
   onDownload: () => void;
 }) {
   return (
-    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+    <Modal transparent visible animationType="fade" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <View style={styles.contextOverlay}>
         <Pressable accessibilityLabel="Close link menu" onPress={onClose} style={StyleSheet.absoluteFill} />
-        <View style={styles.contextSheet}>
+        <SafeBottomSheet style={styles.contextSheet}>
           <View style={styles.contextHeader}>
             <View style={styles.contextIcon}><Globe2 color={colors.blue700} size={19} /></View>
             <View style={styles.contextCopy}>
@@ -541,7 +757,7 @@ function ContextMenu({target, bookmarked, downloadable, onClose, onOpen, onNewTa
           <ContextAction icon={<Copy color={colors.ink} size={20} />} label="Copy address" onPress={onCopy} />
           <ContextAction icon={<Share2 color={colors.ink} size={20} />} label="Share" onPress={onShare} />
           <ContextAction icon={<Bookmark color={colors.ink} size={20} />} label={bookmarked ? 'Remove bookmark' : 'Add bookmark'} onPress={onBookmark} last />
-        </View>
+        </SafeBottomSheet>
       </View>
     </Modal>
   );
@@ -559,7 +775,7 @@ const styles = StyleSheet.create({
   brandCopy: {flex: 1, paddingHorizontal: spacing.md},
   brand: {fontSize: 19, fontWeight: '900', color: colors.blue950},
   tagline: {fontSize: 12, color: colors.muted, marginTop: 2},
-  privateButton: {width: 42, height: 42, borderRadius: 21, backgroundColor: colors.sky100, alignItems: 'center', justifyContent: 'center'},
+  privateButton: {width: 48, height: 48, borderRadius: 24, backgroundColor: colors.sky100, alignItems: 'center', justifyContent: 'center'},
   privateActive: {backgroundColor: colors.success},
   privateNotice: {flexDirection: 'row', gap: 8, borderRadius: radius.md, backgroundColor: colors.successSoft, padding: spacing.md, marginBottom: spacing.md},
   privateNoticeText: {flex: 1, fontSize: 12, lineHeight: 17, color: colors.success},
@@ -578,8 +794,8 @@ const styles = StyleSheet.create({
   sectionTitle: {fontSize: 17, fontWeight: '800', color: colors.ink, marginBottom: spacing.sm},
   linkRow: {minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.white, borderRadius: radius.md, paddingHorizontal: spacing.md, marginBottom: 8, borderWidth: 1, borderColor: colors.line},
   linkText: {flex: 1, fontSize: 13, fontWeight: '700', color: colors.ink},
-  addressRow: {height: 52, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.white, paddingHorizontal: 6, gap: 4, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line},
-  navButton: {width: 38, height: 38, alignItems: 'center', justifyContent: 'center'},
+  addressRow: {height: 56, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.white, paddingHorizontal: 2, gap: 2, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line},
+  navButton: {width: 48, height: 48, alignItems: 'center', justifyContent: 'center'},
   addressBar: {flex: 1, height: 39, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 20, paddingHorizontal: 12, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line},
   addressInput: {flex: 1, fontSize: 13, color: colors.ink, paddingVertical: 0},
   progressTrack: {height: 2, backgroundColor: colors.sky100},
@@ -594,25 +810,25 @@ const styles = StyleSheet.create({
   mediaFoundText: {fontSize: 13, fontWeight: '800', color: colors.white},
   webToolbar: {height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', backgroundColor: colors.white, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line},
   webAction: {flex: 1, height: 48, alignItems: 'center', justifyContent: 'center'},
-  tabCount: {width: 30, height: 30, borderWidth: 2, borderColor: colors.ink, borderRadius: 7, alignItems: 'center', justifyContent: 'center', marginHorizontal: 15},
+  tabCount: {width: 48, height: 48, borderWidth: 2, borderColor: colors.ink, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginHorizontal: 6},
   tabCountText: {fontSize: 12, fontWeight: '800', color: colors.ink},
-  modalPage: {flex: 1, backgroundColor: colors.surface, paddingTop: 18},
+  modalPage: {flex: 1, backgroundColor: colors.surface},
   modalHeader: {height: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg},
   modalTitle: {fontSize: 24, fontWeight: '900', color: colors.ink},
-  modalNew: {flexDirection: 'row', gap: 6, alignItems: 'center', backgroundColor: colors.blue700, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 9},
+  modalNew: {minHeight: 48, flexDirection: 'row', gap: 6, alignItems: 'center', backgroundColor: colors.blue700, borderRadius: radius.md, paddingHorizontal: 12},
   modalNewText: {fontSize: 13, color: colors.white, fontWeight: '800'},
   tabCard: {minHeight: 70, flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, borderRadius: radius.lg, marginBottom: 10},
   tabCardActive: {borderColor: colors.blue600, backgroundColor: '#F4F9FF'},
   tabCopy: {flex: 1},
   tabTitle: {fontSize: 14, fontWeight: '800', color: colors.ink},
   tabUrl: {fontSize: 11, color: colors.muted, marginTop: 3},
-  closeTab: {padding: 8},
-  close: {padding: 8},
+  closeTab: {width: 48, height: 48, alignItems: 'center', justifyContent: 'center'},
+  close: {width: 48, height: 48, alignItems: 'center', justifyContent: 'center'},
   modalDone: {margin: spacing.lg, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, backgroundColor: colors.blue700},
   modalDoneText: {fontSize: 15, fontWeight: '800', color: colors.white},
   emptyList: {textAlign: 'center', color: colors.muted, marginTop: 60},
   contextOverlay: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(3, 18, 38, 0.38)'},
-  contextSheet: {backgroundColor: colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: 28},
+  contextSheet: {backgroundColor: colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: spacing.lg, paddingTop: spacing.lg},
   contextHeader: {flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingBottom: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line},
   contextIcon: {width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.sky100},
   contextCopy: {flex: 1},

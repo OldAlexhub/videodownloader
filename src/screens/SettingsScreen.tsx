@@ -2,7 +2,7 @@ import React, {useState} from 'react';
 import {ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View} from 'react-native';
 import {AdsConsent} from 'react-native-google-mobile-ads';
 import {ChevronRight, Cookie, Database, Download, Folder, Globe2, Info, LockKeyhole, RotateCcw, Search, ShieldCheck, Trash2, Wifi, X} from 'lucide-react-native';
-import {SafeScrollView} from '../components/ScreenContainer';
+import {SafeBottomSheet, SafeModalScreen, SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {downloadManager} from '../native/DownloadManager';
 import {DEFAULT_SETTINGS, type AppSettings} from '../types';
@@ -58,12 +58,24 @@ export function SettingsScreen() {
     }},
   ]);
 
+  const deleteServerAnalytics = () => Alert.alert('Delete server analytics?', 'This requests deletion of analytics linked to this installation, then gives this installation a new anonymous identifier.', [
+    {text: 'Cancel', style: 'cancel'},
+    {text: 'Delete', style: 'destructive', onPress: async () => {
+      try {
+        const deleted = await downloadManager.deleteServerAnalytics();
+        Alert.alert(deleted ? 'Analytics deleted' : 'Request unavailable', deleted ? 'Server analytics for the previous anonymous identifier were deleted.' : 'Please update the server or try again later.');
+      } catch {
+        Alert.alert('Could not delete analytics', 'Please check your connection and try again.');
+      }
+    }},
+  ]);
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}><Text style={styles.title}>Settings</Text><Text style={styles.subtitle}>Downloads, browser, advertising, and privacy</Text></View>
       <SafeScrollView>
         <SettingsSection title="Downloads">
-          <SettingRow icon={<Download color={colors.blue700} size={20} />} title="Default quality" value={qualityLabel(settings.defaultQuality)} onPress={() => setChoice({title: 'Default quality', key: 'defaultQuality', options: [{label: 'Ask Every Time', value: 'ask'}, {label: 'Best Available', value: 'best'}, {label: 'Balanced', value: 'balanced'}, {label: 'Smallest', value: 'smallest'}]})} />
+          <SettingRow icon={<Download color={colors.blue700} size={20} />} title="Preferred quality" value={qualityLabel(settings.preferredQuality)} onPress={() => setChoice({title: 'Preferred quality', key: 'preferredQuality', options: [{label: 'Best Available', value: 'best'}, {label: 'Balanced', value: 'balanced'}, {label: 'Smallest', value: 'smallest'}]})} />
           <SettingRow icon={<Database color={colors.blue700} size={20} />} title="Parallel downloads" value={`${settings.parallelDownloads}`} onPress={() => setChoice({title: 'Parallel downloads', key: 'parallelDownloads', options: [1, 2, 3, 4].map(value => ({label: `${value}`, value}))})} />
           <SettingRow icon={<Folder color={colors.blue700} size={20} />} title="Default folder" value={settings.destinationName} onPress={chooseFolder} />
           <ToggleRow icon={<Wifi color={colors.blue700} size={20} />} title="Wi-Fi only" description="Queue downloads until Wi-Fi is available" value={settings.wifiOnly} onChange={value => updateSettings({wifiOnly: value})} />
@@ -84,14 +96,15 @@ export function SettingsScreen() {
 
         <SettingsSection title="Advertising & Privacy">
           <SettingRow icon={<Info color={colors.blue700} size={20} />} title="Ad disclosure" value="Free with ads" onPress={() => Alert.alert('Advertising disclosure', 'The app is free and supported by Google AdMob. Ads never unlock downloads, quality, speed, playback, or tools. Ad requests can process advertising identifiers, approximate location, app interactions, and diagnostics depending on your consent and device settings.')} />
-          <ToggleRow icon={<Database color={colors.blue700} size={20} />} title="Performance analytics" description="On by default: send limited usage, download metadata, ad, and performance events to Old Alex Hub. Turn off anytime." value={settings.analyticsEnabled} onChange={async value => {await updateSettings({analyticsEnabled: value}); await downloadManager.setAnalyticsEnabled(value);}} />
+          <ToggleRow icon={<Database color={colors.blue700} size={20} />} title="Performance & playback analytics" description="On by default: send anonymous reliability, playback, advertising, and usage measurements. Media, cookies, filenames, and full URLs are never sent." value={settings.analyticsEnabled} onChange={async value => {await updateSettings({analyticsEnabled: value}); await downloadManager.setAnalyticsEnabled(value);}} />
           <ToggleRow icon={<Search color={colors.blue700} size={20} />} title="Search & website insights" description="On by default: include submitted search terms and visited domains in aggregate reports. Requires Performance analytics; private sessions are excluded." value={settings.usageInsightsEnabled} onChange={async value => {await updateSettings({usageInsightsEnabled: value}); await downloadManager.setUsageInsightsEnabled(value);}} />
           <SettingRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Privacy choices" onPress={() => AdsConsent.showPrivacyOptionsForm().catch(() => Alert.alert('Privacy choices unavailable', 'A privacy options form is not required or is temporarily unavailable.'))} />
+          <SettingRow icon={<Trash2 color={colors.danger} size={20} />} title="Delete server analytics" onPress={deleteServerAnalytics} />
           <SettingRow icon={<LockKeyhole color={colors.blue700} size={20} />} title="Privacy policy" onPress={() => setPrivacyVisible(true)} last />
         </SettingsSection>
 
         <SettingsSection title="About">
-          <View style={styles.aboutRow}><Image source={require('../../assets/logo.png')} style={imageStyles.logo} /><View><Text style={styles.aboutName}>Video Downloader & Media Saver</Text><Text style={styles.aboutMeta}>Version 1.0.4 · Old Alex Hub</Text></View></View>
+          <View style={styles.aboutRow}><Image source={require('../../assets/logo.png')} style={imageStyles.logo} /><View><Text style={styles.aboutName}>Video Downloader & Media Saver</Text><Text style={styles.aboutMeta}>Version 2.0.0 · Old Alex Hub</Text></View></View>
           <View style={styles.notice}><Text style={styles.noticeText}>Only download media you own, have permission to download, or that is made available for downloading by the content provider. Protected media is not supported.</Text></View>
           <SettingRow icon={<Trash2 color={colors.danger} size={20} />} title="Clear all local app data" danger onPress={clearAll} last />
         </SettingsSection>
@@ -103,7 +116,7 @@ export function SettingsScreen() {
   );
 }
 
-function qualityLabel(value: AppSettings['defaultQuality']) { return value === 'ask' ? 'Ask Every Time' : value === 'best' ? 'Best Available' : value[0].toUpperCase() + value.slice(1); }
+function qualityLabel(value: AppSettings['preferredQuality']) { return value === 'best' ? 'Best Available' : value[0].toUpperCase() + value.slice(1); }
 function engineLabel(value: AppSettings['searchEngine']) { return value === 'duckduckgo' ? 'DuckDuckGo' : value[0].toUpperCase() + value.slice(1); }
 
 function SettingsSection({title, children}: React.PropsWithChildren<{title: string}>) {
@@ -119,11 +132,29 @@ function ToggleRow({icon, title, description, value, onChange, last}: {icon: Rea
 }
 
 function ChoiceModal({choice, current, onClose, onSelect}: {choice: Choice; current: unknown; onClose: () => void; onSelect: (value: string | number) => void}) {
-  return <Modal visible={Boolean(choice)} transparent animationType="slide" onRequestClose={onClose}><Pressable onPress={onClose} style={styles.backdrop}><View style={styles.choiceSheet} onStartShouldSetResponder={() => true}><View style={styles.choiceHeader}><Text style={styles.choiceTitle}>{choice?.title}</Text><Pressable onPress={onClose}><X color={colors.ink} size={22} /></Pressable></View>{choice?.options.map(option => <Pressable key={`${option.value}`} onPress={() => onSelect(option.value)} style={styles.choiceRow}><Text style={[styles.choiceText, option.value === current && styles.choiceSelected]}>{option.label}</Text>{option.value === current ? <View style={styles.dot} /> : null}</Pressable>)}</View></Pressable></Modal>;
+  return <Modal visible={Boolean(choice)} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent><Pressable onPress={onClose} style={styles.backdrop}><SafeBottomSheet style={styles.choiceSheet} onStartShouldSetResponder={() => true}><View style={styles.choiceHeader}><Text style={styles.choiceTitle}>{choice?.title}</Text><Pressable onPress={onClose} style={styles.closeButton}><X color={colors.ink} size={22} /></Pressable></View>{choice?.options.map(option => <Pressable key={`${option.value}`} onPress={() => onSelect(option.value)} style={styles.choiceRow}><Text style={[styles.choiceText, option.value === current && styles.choiceSelected]}>{option.label}</Text>{option.value === current ? <View style={styles.dot} /> : null}</Pressable>)}</SafeBottomSheet></Pressable></Modal>;
 }
 
 function PrivacyModal({visible, onClose}: {visible: boolean; onClose: () => void}) {
-  return <Modal visible={visible} animationType="slide" onRequestClose={onClose}><View style={styles.privacy}><View style={styles.choiceHeader}><Text style={styles.choiceTitle}>Privacy summary</Text><Pressable onPress={onClose}><X color={colors.ink} size={22} /></Pressable></View><ScrollView contentContainerStyle={styles.privacyContent}><Text style={styles.privacyHeading}>Local app data</Text><Text style={styles.privacyText}>Download records, browser history, bookmarks, media metadata, and app preferences are stored locally. Private browsing does not add pages to local history. Downloaded media stays on the device or in a folder you select.</Text><Text style={styles.privacyHeading}>Old Alex Hub analytics</Text><Text style={styles.privacyText}>When performance analytics is enabled, the app sends a random installation ID, app and device version, locale, time zone, download title and filename text, source domain, media type, quality, byte counts, result, timing, and ad impression events to vd.server.oldalexhub.com. Performance analytics and Search & website insights are on by default and can each be disabled in Settings. When both are on, submitted search terms and visited site domains from non-private sessions are used for aggregate top search and site reports. Private browsing is excluded, and full page URLs, paths, and query strings are not sent. The server may derive approximate city and country from the request IP. Media files, page cookies, and full signed URLs are not sent. Analytics failures never block app features. You can disable either setting in Settings.</Text><Text style={styles.privacyHeading}>Advertising</Text><Text style={styles.privacyText}>Google AdMob supports the free app. Google advertising services may process advertising identifiers, approximate location, app interactions, diagnostics, and related advertising data depending on configuration, consent, and device settings.</Text><Text style={styles.privacyHeading}>No account</Text><Text style={styles.privacyText}>No Old Alex Hub account is required. Internet access is used for browsing, downloads, analytics, ads, and consent messages.</Text><Text style={styles.privacyHeading}>Your responsibility</Text><Text style={styles.privacyText}>Only download media you own, have permission to save, or that the provider makes available for downloading. The app does not bypass DRM, paywalls, subscriptions, authentication, or access controls.</Text><Text style={styles.privacyHeading}>Children</Text><Text style={styles.privacyText}>This utility is not directed to children under 13. Contact Old Alex Hub using the support address in the Play Store listing for privacy requests.</Text></ScrollView></View></Modal>;
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
+      <SafeModalScreen style={styles.privacy}>
+        <View style={styles.choiceHeader}><Text style={styles.choiceTitle}>Privacy summary</Text><Pressable onPress={onClose} style={styles.closeButton}><X color={colors.ink} size={22} /></Pressable></View>
+        <ScrollView contentContainerStyle={styles.privacyContent}>
+          <Text style={styles.privacyHeading}>Local app data</Text>
+          <Text style={styles.privacyText}>Download records, browser history, bookmarks, media metadata, and app preferences are stored locally. Private browsing does not add pages to local history. Downloaded media stays on the device or in a folder you select.</Text>
+          <Text style={styles.privacyHeading}>Old Alex Hub analytics</Text>
+          <Text style={styles.privacyText}>Performance & playback analytics sends an anonymous installation ID and structured measurements about sessions, detection, downloads, playback, ads, and coded failures. It never sends media, cookies, authorization headers, filenames, titles, or full URLs. Search & website insights separately includes submitted search terms and visited domains from non-private sessions. Both settings are on by default and independently switchable. Turning analytics off clears queued events. Delete server analytics removes data linked to the current anonymous identifier and rotates it.</Text>
+          <Text style={styles.privacyHeading}>Advertising</Text>
+          <Text style={styles.privacyText}>Google AdMob supports the free app. Google advertising services may process advertising identifiers, approximate location, app interactions, diagnostics, and related advertising data depending on consent and device settings.</Text>
+          <Text style={styles.privacyHeading}>No account</Text>
+          <Text style={styles.privacyText}>No Old Alex Hub account is required. Internet access is used for browsing, downloads, analytics, ads, and consent messages.</Text>
+          <Text style={styles.privacyHeading}>Your responsibility</Text>
+          <Text style={styles.privacyText}>Only download media you own, have permission to save, or that the provider makes available for downloading. The app does not bypass DRM, paywalls, subscriptions, authentication, or access controls.</Text>
+        </ScrollView>
+      </SafeModalScreen>
+    </Modal>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -148,14 +179,15 @@ const styles = StyleSheet.create({
   notice: {marginHorizontal: spacing.md, marginBottom: spacing.md, padding: spacing.md, backgroundColor: colors.warningSoft, borderRadius: radius.md},
   noticeText: {fontSize: 11, lineHeight: 17, color: colors.warning},
   backdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(3,16,43,0.5)'},
-  choiceSheet: {backgroundColor: colors.white, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 30},
+  choiceSheet: {backgroundColor: colors.white, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg},
   choiceHeader: {minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
   choiceTitle: {fontSize: 21, fontWeight: '900', color: colors.ink},
+  closeButton: {width: 48, height: 48, alignItems: 'center', justifyContent: 'center'},
   choiceRow: {height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line},
   choiceText: {fontSize: 14, color: colors.ink},
   choiceSelected: {fontWeight: '900', color: colors.blue700},
   dot: {width: 10, height: 10, borderRadius: 5, backgroundColor: colors.blue700},
-  privacy: {flex: 1, backgroundColor: colors.white, paddingTop: 20, paddingHorizontal: spacing.lg},
+  privacy: {flex: 1, backgroundColor: colors.white, paddingHorizontal: spacing.lg},
   clearingOverlay: {position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 5, alignItems: 'center', justifyContent: 'center', gap: spacing.md, backgroundColor: 'rgba(255,255,255,0.94)'},
   clearingText: {fontSize: 14, fontWeight: '700', color: colors.ink},
   privacyContent: {paddingBottom: 40},

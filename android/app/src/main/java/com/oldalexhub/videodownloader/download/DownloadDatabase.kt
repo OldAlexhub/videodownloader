@@ -2,12 +2,14 @@ package com.oldalexhub.videodownloader.download
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
 class DownloadDatabase private constructor(context: Context) :
   SQLiteOpenHelper(context.applicationContext, "media_saver.db", null, VERSION) {
+  private val appContext = context.applicationContext
 
   override fun onCreate(db: SQLiteDatabase) {
     db.execSQL(
@@ -50,6 +52,18 @@ class DownloadDatabase private constructor(context: Context) :
         ,wifi_only INTEGER NOT NULL DEFAULT 0
         ,auto_resume INTEGER NOT NULL DEFAULT 1
         ,hidden_downloads INTEGER NOT NULL DEFAULT 0
+        ,asset_id TEXT
+        ,variant_id TEXT
+        ,protocol TEXT NOT NULL DEFAULT 'progressive'
+        ,selection_token TEXT
+        ,video_codec TEXT
+        ,audio_codec TEXT
+        ,duration_ms INTEGER NOT NULL DEFAULT 0
+        ,audio_mode TEXT NOT NULL DEFAULT 'unknown'
+        ,flow_id TEXT
+        ,processing_stage TEXT NOT NULL DEFAULT 'queued'
+        ,playback_position_ms INTEGER NOT NULL DEFAULT 0
+        ,watched_percent REAL NOT NULL DEFAULT 0
       )
       """.trimIndent(),
     )
@@ -69,14 +83,29 @@ class DownloadDatabase private constructor(context: Context) :
     if (oldVersion < 4) {
       db.execSQL("ALTER TABLE downloads ADD COLUMN hidden_downloads INTEGER NOT NULL DEFAULT 0")
     }
+    if (oldVersion < 5) {
+      db.execSQL("ALTER TABLE downloads ADD COLUMN asset_id TEXT")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN variant_id TEXT")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN protocol TEXT NOT NULL DEFAULT 'progressive'")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN selection_token TEXT")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN video_codec TEXT")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN audio_codec TEXT")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN audio_mode TEXT NOT NULL DEFAULT 'unknown'")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN flow_id TEXT")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN processing_stage TEXT NOT NULL DEFAULT 'queued'")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN playback_position_ms INTEGER NOT NULL DEFAULT 0")
+      db.execSQL("ALTER TABLE downloads ADD COLUMN watched_percent REAL NOT NULL DEFAULT 0")
+    }
   }
 
   fun insert(values: ContentValues) {
     writableDatabase.insertOrThrow("downloads", null, values)
+    notifyChanged()
   }
 
   fun update(id: String, values: ContentValues): Int =
-    writableDatabase.update("downloads", values, "id = ?", arrayOf(id))
+    writableDatabase.update("downloads", values, "id = ?", arrayOf(id)).also { if (it > 0) notifyChanged() }
 
   fun get(id: String): DownloadRecord? =
     readableDatabase.query("downloads", null, "id = ?", arrayOf(id), null, null, null).use { cursor ->
@@ -95,12 +124,17 @@ class DownloadDatabase private constructor(context: Context) :
     null,
   ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
 
-  fun delete(id: String): Int = writableDatabase.delete("downloads", "id = ?", arrayOf(id))
+  fun delete(id: String): Int = writableDatabase.delete("downloads", "id = ?", arrayOf(id)).also { if (it > 0) notifyChanged() }
 
-  fun clearCompleted(): Int = writableDatabase.update("downloads", ContentValues().apply { put("hidden_downloads", 1) }, "status = 'completed'", null)
+  fun clearCompleted(): Int = writableDatabase.update("downloads", ContentValues().apply { put("hidden_downloads", 1) }, "status = 'completed'", null).also { if (it > 0) notifyChanged() }
 
   fun deleteAll() {
     writableDatabase.delete("downloads", null, null)
+    notifyChanged()
+  }
+
+  private fun notifyChanged() {
+    appContext.sendBroadcast(Intent(ACTION_DOWNLOADS_CHANGED).setPackage(appContext.packageName))
   }
 
   fun storageBytes(mediaType: String): Long = readableDatabase.rawQuery(
@@ -109,7 +143,8 @@ class DownloadDatabase private constructor(context: Context) :
   ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L }
 
   companion object {
-    private const val VERSION = 4
+    const val ACTION_DOWNLOADS_CHANGED = "com.oldalexhub.videodownloader.DOWNLOADS_CHANGED"
+    private const val VERSION = 5
     @Volatile private var instance: DownloadDatabase? = null
 
     fun get(context: Context): DownloadDatabase = instance ?: synchronized(this) {
@@ -156,6 +191,18 @@ data class DownloadRecord(
   val wifiOnly: Boolean,
   val autoResume: Boolean,
   val hiddenFromDownloads: Boolean,
+  val assetId: String?,
+  val variantId: String?,
+  val protocol: String,
+  val selectionToken: String?,
+  val videoCodec: String?,
+  val audioCodec: String?,
+  val durationMs: Long,
+  val audioMode: String,
+  val flowId: String?,
+  val processingStage: String,
+  val playbackPositionMs: Long,
+  val watchedPercent: Double,
 ) {
   companion object {
     fun from(cursor: Cursor): DownloadRecord {
@@ -205,6 +252,18 @@ data class DownloadRecord(
         wifiOnly = cursor.getInt(cursor.getColumnIndexOrThrow("wifi_only")) == 1,
         autoResume = cursor.getInt(cursor.getColumnIndexOrThrow("auto_resume")) == 1,
         hiddenFromDownloads = cursor.getInt(cursor.getColumnIndexOrThrow("hidden_downloads")) == 1,
+        assetId = text("asset_id"),
+        variantId = text("variant_id"),
+        protocol = text("protocol") ?: "progressive",
+        selectionToken = text("selection_token"),
+        videoCodec = text("video_codec"),
+        audioCodec = text("audio_codec"),
+        durationMs = cursor.getLong(cursor.getColumnIndexOrThrow("duration_ms")),
+        audioMode = text("audio_mode") ?: "unknown",
+        flowId = text("flow_id"),
+        processingStage = text("processing_stage") ?: "queued",
+        playbackPositionMs = cursor.getLong(cursor.getColumnIndexOrThrow("playback_position_ms")),
+        watchedPercent = cursor.getDouble(cursor.getColumnIndexOrThrow("watched_percent")),
       )
     }
   }

@@ -3,7 +3,10 @@ package com.oldalexhub.videodownloader
 import android.Manifest
 import android.app.Activity
 import android.content.ContentValues
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -25,11 +28,14 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.WritableMap
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.oldalexhub.videodownloader.download.DownloadDatabase
 import com.oldalexhub.videodownloader.download.DownloadRecord
 import com.oldalexhub.videodownloader.download.DownloadScheduler
 import com.oldalexhub.videodownloader.download.DownloadWorker
+import com.oldalexhub.videodownloader.download.AdaptiveExporter
 import com.oldalexhub.videodownloader.player.PlayerActivity
 import org.json.JSONObject
 import java.io.File
@@ -43,16 +49,62 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
   ReactContextBaseJavaModule(context), ActivityEventListener {
   private val database = DownloadDatabase.get(context)
   private var folderPromise: Promise? = null
+  private val downloadReceiver = object : BroadcastReceiver() {
+    override fun onReceive(receiverContext: Context?, intent: Intent?) = emitDownloadChanged()
+  }
 
-  init { context.addActivityEventListener(this) }
+  init {
+    context.addActivityEventListener(this)
+    ContextCompat.registerReceiver(context, downloadReceiver, IntentFilter(DownloadDatabase.ACTION_DOWNLOADS_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
+  }
+
+  override fun invalidate() {
+    runCatching { context.unregisterReceiver(downloadReceiver) }
+    super.invalidate()
+  }
 
   override fun getName() = "VDDownloadManager"
+
+  @ReactMethod
+  fun addListener(eventName: String) = Unit
+
+  @ReactMethod
+  fun removeListeners(count: Int) = Unit
+
+  private fun emitDownloadChanged() {
+    if (context.hasActiveReactInstance()) {
+      context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("VDDownloadChanged", null)
+    }
+  }
 
   @ReactMethod
   fun listDownloads(promise: Promise) {
     runCatching {
       Arguments.createArray().apply { database.list().forEach { pushMap(it.toWritableMap()) } }
     }.fold(promise::resolve) { error -> promise.reject("E_DATABASE", error.message, error) }
+  }
+
+  @ReactMethod
+  fun deleteServerAnalytics(promise: Promise) {
+    Thread {
+      runCatching { Telemetry.deleteServerAnalytics(context) }
+        .fold(promise::resolve) { error -> promise.reject("E_ANALYTICS_DELETE", error.message, error) }
+    }.start()
+  }
+
+  @ReactMethod
+  fun configureTelemetry(revision: String, sampleRate: Double, batchSize: Int, promise: Promise) {
+    Telemetry.configure(context, revision, sampleRate, batchSize)
+    promise.resolve(true)
+  }
+
+  @ReactMethod
+  fun getAppVersionInfo(promise: Promise) {
+    promise.resolve(Arguments.createMap().apply {
+      putInt("versionCode", BuildConfig.VERSION_CODE)
+      putString("versionName", BuildConfig.VERSION_NAME)
+      putString("packageName", context.packageName)
+    })
   }
 
   @ReactMethod
@@ -103,17 +155,29 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         put("wifi_only", if (payload.boolean("wifiOnly")) 1 else 0)
         put("auto_resume", if (payload.boolean("resumeAutomatically")) 1 else 0)
         put("hidden_downloads", 0)
+        put("asset_id", payload.optionalString("assetId"))
+        put("variant_id", payload.optionalString("variantId"))
+        put("protocol", payload.string("protocol").ifBlank { "progressive" })
+        put("selection_token", payload.optionalString("selectionToken"))
+        put("video_codec", payload.optionalString("videoCodec"))
+        put("audio_codec", payload.optionalString("audioCodec"))
+        put("duration_ms", payload.long("durationMs"))
+        put("audio_mode", payload.string("audioMode").ifBlank { "unknown" })
+        put("flow_id", payload.optionalString("flowId"))
+        put("processing_stage", "queued")
+        put("playback_position_ms", 0)
+        put("watched_percent", 0.0)
       })
       val maxParallel = payload.int("parallelDownloads", 2).coerceIn(1, 4)
       context.getSharedPreferences("download_settings", 0).edit().putInt("max_parallel", maxParallel).apply()
       requestNotificationPermission()
       DownloadScheduler.enqueue(context, id, payload.boolean("wifiOnly"))
       Telemetry.record(context, "download_started", JSONObject().apply {
-        put("title", title)
-        put("filename", finalFilename)
         put("sourceHost", runCatching { Uri.parse(sourceUrl).host }.getOrNull())
         put("mediaType", payload.string("mediaType"))
-        put("quality", payload.string("qualityLabel"))
+        put("protocol", payload.string("protocol"))
+        put("stage", "queued")
+        put("flowId", payload.string("flowId"))
         put("estimatedBytes", payload.long("estimatedBytes"))
       })
       id
@@ -122,7 +186,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
 
   @ReactMethod
   fun pauseDownload(id: String, promise: Promise) {
-    runCatching { DownloadScheduler.pause(context, id); true }
+    runCatching { database.get(id)?.let { recordDownloadEvent("download_paused", it) }; DownloadScheduler.pause(context, id); true }
       .fold(promise::resolve) { error -> promise.reject("E_PAUSE", error.message, error) }
   }
 
@@ -135,6 +199,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
       }
       database.update(id, ContentValues().apply { put("status", "queued"); putNull("failure_message"); putNull("failure_code") })
       DownloadScheduler.enqueue(context, id, record.wifiOnly)
+      recordDownloadEvent("download_resumed", record)
       true
     }.fold(promise::resolve) { error -> promise.reject("E_RESTART_REQUIRED", error.message, error) }
   }
@@ -149,13 +214,14 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         putNull("failure_message"); putNull("failure_code"); putNull("etag"); putNull("last_modified")
       })
       DownloadScheduler.enqueue(context, id, database.get(id)?.wifiOnly ?: false)
+      database.get(id)?.let { recordDownloadEvent("download_retry", it) }
       true
     }.fold(promise::resolve) { error -> promise.reject("E_RESTART", error.message, error) }
   }
 
   @ReactMethod
   fun cancelDownload(id: String, promise: Promise) {
-    runCatching { DownloadScheduler.cancel(context, id); true }
+    runCatching { database.get(id)?.let { recordDownloadEvent("download_cancelled", it) }; DownloadScheduler.cancel(context, id); true }
       .fold(promise::resolve) { error -> promise.reject("E_CANCEL", error.message, error) }
   }
 
@@ -192,8 +258,10 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
       val intent = if (record.mediaType == "video" || record.mediaType == "audio") {
         Intent(context, PlayerActivity::class.java).apply {
           putExtra(PlayerActivity.EXTRA_URI, uri.toString())
+          putExtra(PlayerActivity.EXTRA_DOWNLOAD_ID, record.id)
           putExtra(PlayerActivity.EXTRA_TITLE, record.title)
           putExtra(PlayerActivity.EXTRA_MIME, record.mimeType)
+          putExtra(PlayerActivity.EXTRA_POSITION, record.playbackPositionMs)
           addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
       } else Intent(Intent.ACTION_VIEW).apply {
@@ -294,7 +362,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         connection.readTimeout = 10_000
         connection.setRequestProperty("Accept-Encoding", "identity")
         connection.setRequestProperty("Referer", pageUrl)
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36 VDMediaSaver/1.0")
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36 VDMediaSaver/2.0")
         CookieManager.getInstance().getCookie(sourceUrl)?.let { connection.setRequestProperty("Cookie", it) }
         if (connection.responseCode !in 200..299) error("The media manifest could not be loaded")
         val text = connection.inputStream.bufferedReader().use { it.readText() }
@@ -302,39 +370,92 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         if (text.contains("ContentProtection", true) || (text.contains("#EXT-X-KEY", true) && !text.contains("METHOD=NONE", true))) {
           throw IllegalStateException("Protected media cannot be downloaded.")
         }
+        val isHls = sourceUrl.substringBefore('?').endsWith(".m3u8", true) || text.contains("#EXTM3U")
+        if (isHls && text.contains("#EXTINF", true) && !text.contains("#EXT-X-ENDLIST", true)) error("Live streams are not supported")
+        if (!isHls && Regex("<MPD[^>]+type=[\"']dynamic[\"']", RegexOption.IGNORE_CASE).containsMatchIn(text)) error("Live streams are not supported")
+        val requestHeaders = buildMap {
+          put("Referer", pageUrl)
+          put("User-Agent", "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36 VDMediaSaver/2.0")
+          CookieManager.getInstance().getCookie(sourceUrl)?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+        }
+        val inspected = AdaptiveExporter.inspect(context, sourceUrl, requestHeaders)
+        if (inspected.any { it.protected }) throw IllegalStateException("Protected media cannot be downloaded.")
+        if (inspected.none { it.hasAudio }) throw IllegalStateException("The manifest has no compatible video and audio combination.")
+        val mime = if (isHls) "application/vnd.apple.mpegurl" else "application/dash+xml"
+        val extension = if (isHls) "m3u8" else "mpd"
         val results = Arguments.createArray()
-        if (sourceUrl.substringBefore('?').endsWith(".m3u8", true) || text.contains("#EXTM3U")) {
-          val lines = text.lines().map { it.trim() }
-          lines.forEachIndexed { index, line ->
-            if (line.startsWith("#EXT-X-STREAM-INF", true)) {
-              val attrs = line.substringAfter(':')
-              val bandwidth = Regex("BANDWIDTH=(\\d+)", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1)?.toLongOrNull() ?: 0
-              val resolution = Regex("RESOLUTION=(\\d+)x(\\d+)", RegexOption.IGNORE_CASE).find(attrs)
-              val width = resolution?.groupValues?.get(1)?.toIntOrNull() ?: 0
-              val height = resolution?.groupValues?.get(2)?.toIntOrNull() ?: 0
-              val path = lines.drop(index + 1).firstOrNull { it.isNotBlank() && !it.startsWith('#') } ?: return@forEachIndexed
-              val muxedAudio = !Regex("(?:^|,)AUDIO=", RegexOption.IGNORE_CASE).containsMatchIn(attrs) && Regex("mp4a|ac-3|ec-3|opus|vorbis", RegexOption.IGNORE_CASE).containsMatchIn(attrs)
-              results.pushMap(manifestMap(URI(sourceUrl).resolve(path).toString(), pageUrl, title, "application/vnd.apple.mpegurl", "m3u8", width, height, bandwidth, muxedAudio))
-            }
-          }
-          if (results.size() == 0) results.pushMap(manifestMap(sourceUrl, pageUrl, title, "application/vnd.apple.mpegurl", "m3u8", 0, 0, 0, false))
-        } else {
-          val representation = Regex("<Representation\\b([^>]*)>(.*?)</Representation>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-          representation.findAll(text).forEach { match ->
-            val attrs = match.groupValues[1]
-            val body = match.groupValues[2]
-            val height = Regex("height=\"(\\d+)\"", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val width = Regex("width=\"(\\d+)\"", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val bandwidth = Regex("bandwidth=\"(\\d+)\"", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1)?.toLongOrNull() ?: 0
-            val mime = Regex("mimeType=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attrs)?.groupValues?.get(1) ?: "video/mp4"
-            val base = Regex("<BaseURL[^>]*>([^<]+)</BaseURL>", RegexOption.IGNORE_CASE).find(body)?.groupValues?.get(1)?.trim()
-            val url = if (base != null && !text.contains("SegmentTemplate", true) && !text.contains("SegmentList", true)) URI(sourceUrl).resolve(base).toString() else sourceUrl
-            results.pushMap(manifestMap(url, pageUrl, title, if (url == sourceUrl) "application/dash+xml" else mime, if (url == sourceUrl) "mpd" else mime.substringAfter('/', "mp4").substringBefore('+'), width, height, bandwidth, mime.startsWith("audio/")))
-          }
-          if (results.size() == 0) results.pushMap(manifestMap(sourceUrl, pageUrl, title, "application/dash+xml", "mpd", 0, 0, 0, false))
+        inspected.forEach { variant ->
+          results.pushMap(manifestMap(sourceUrl, pageUrl, title, mime, extension, variant.width, variant.height, variant.bitrate, variant.hasAudio, variant.audioMode, variant.videoCodec, variant.selectionToken, variant.audioCodec, variant.audioLanguage))
         }
         results
       }.fold(promise::resolve) { error -> promise.reject(if (error.message?.contains("Protected") == true) "E_PROTECTED" else "E_MANIFEST", error.message, error) }
+    }.start()
+  }
+
+  @ReactMethod
+  fun inspectCandidates(candidates: ReadableArray, promise: Promise) {
+    Thread {
+      runCatching {
+        Arguments.createArray().apply {
+          for (index in 0 until candidates.size()) {
+            val candidate = candidates.getMap(index) ?: continue
+            val sourceUrl = candidate.string("sourceUrl")
+            val pageUrl = candidate.string("pageUrl")
+            val result = Arguments.createMap().apply { putString("candidateKey", candidate.string("candidateKey")) }
+            var connection = URL(sourceUrl).openConnection() as HttpURLConnection
+            fun configure(method: String) {
+              connection.instanceFollowRedirects = true
+              connection.connectTimeout = 10_000
+              connection.readTimeout = 10_000
+              connection.requestMethod = method
+              connection.setRequestProperty("Accept-Encoding", "identity")
+              connection.setRequestProperty("User-Agent", candidate.string("userAgent").ifBlank { "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome Mobile Safari/537.36 VDMediaSaver/2.0" })
+              pageUrl.takeIf { it.isNotBlank() }?.let { connection.setRequestProperty("Referer", it) }
+              CookieManager.getInstance().getCookie(sourceUrl)?.let { connection.setRequestProperty("Cookie", it) }
+            }
+            configure("HEAD")
+            var code = connection.responseCode
+            if (code == 405 || code == 501 || connection.contentType.isNullOrBlank()) {
+              connection.disconnect()
+              connection = URL(sourceUrl).openConnection() as HttpURLConnection
+              configure("GET")
+              connection.setRequestProperty("Range", "bytes=0-4095")
+              code = connection.responseCode
+            }
+            if (code in listOf(401, 403, 404, 410)) {
+              result.putString("inspectionState", "expired")
+              result.putString("supportState", "unsupported")
+              result.putString("unsupportedReason", if (code == 401 || code == 403) "The page session or media link expired" else "The media is no longer available")
+            } else if (code !in 200..299) {
+              result.putString("inspectionState", "unsupported")
+              result.putString("supportState", "unsupported")
+              result.putString("unsupportedReason", "The source rejected inspection (HTTP $code)")
+            } else {
+              val type = connection.contentType?.substringBefore(';')?.trim().orEmpty()
+              val length = connection.getHeaderField("Content-Range")?.substringAfterLast('/')?.toLongOrNull() ?: connection.contentLengthLong.coerceAtLeast(0)
+              result.putString("inspectionState", "ready")
+              result.putString("supportState", "supported")
+              if (type.isNotBlank()) result.putString("mimeType", type)
+              if (length > 0) result.putDouble("estimatedBytes", length.toDouble())
+              result.putBoolean("supportsRange", code == 206 || connection.getHeaderField("Accept-Ranges")?.contains("bytes", true) == true)
+              val extension = type.takeIf { it.isNotBlank() }?.let { mime ->
+                when {
+                  mime.contains("mp4") -> "mp4"
+                  mime.contains("webm") -> "webm"
+                  mime.contains("mpeg") -> if (mime.startsWith("audio")) "mp3" else "mpg"
+                  mime.contains("jpeg") -> "jpg"
+                  mime.contains("png") -> "png"
+                  mime.contains("webp") -> "webp"
+                  else -> null
+                }
+              }
+              extension?.let { result.putString("extension", it); result.putString("container", it.uppercase()) }
+            }
+            connection.disconnect()
+            pushMap(result)
+          }
+        }
+      }.fold(promise::resolve) { error -> promise.reject("E_INSPECTION", error.message, error) }
     }.start()
   }
 
@@ -451,6 +572,14 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
     }
   }
 
+  private fun recordDownloadEvent(name: String, record: DownloadRecord) {
+    Telemetry.record(context, name, JSONObject().apply {
+      put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
+      put("mediaType", record.mediaType); put("protocol", record.protocol); put("stage", record.processingStage)
+      put("bytes", record.downloadedBytes); put("flowId", record.flowId)
+    })
+  }
+
   companion object {
     private const val REQUEST_FOLDER = 4101
     private fun sanitizeFilename(value: String): String = value
@@ -458,16 +587,22 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
       .replace(Regex("\\s+"), " ")
       .trim().trimEnd('.', ' ').take(160).ifBlank { "download.bin" }
 
-    private fun manifestMap(url: String, pageUrl: String, title: String, mime: String, extension: String, width: Int, height: Int, bandwidth: Long, hasAudio: Boolean): WritableMap = Arguments.createMap().apply {
-      putString("id", "$url|$height")
+    private fun manifestMap(url: String, pageUrl: String, title: String, mime: String, extension: String, width: Int, height: Int, bandwidth: Long, hasAudio: Boolean, audioMode: String, codecs: String, selectionToken: String, audioCodec: String = "", language: String? = null): WritableMap = Arguments.createMap().apply {
+      putString("id", "$url|$selectionToken")
       putString("groupKey", "${runCatching { Uri.parse(pageUrl).host }.getOrNull()}|${title.lowercase()}|video")
       putString("sourceUrl", url); putString("pageUrl", pageUrl); putString("title", title)
       putString("mimeType", mime); putString("extension", extension); putString("mediaType", "video")
+      putString("protocol", if (extension == "m3u8") "hls" else "dash"); putString("container", "MP4")
       putString("qualityLabel", if (height > 0) "${height}p" else "Adaptive stream")
       if (height > 0) { putString("resolution", "${height}p"); putInt("height", height); putInt("width", width) }
-      putDouble("estimatedBytes", 0.0); putBoolean("hasAudio", hasAudio); putBoolean("isManifest", extension == "m3u8" || extension == "mpd")
+      putDouble("estimatedBytes", 0.0); putBoolean("hasAudio", hasAudio); putString("audioMode", audioMode); putString("inspectionState", "ready"); putString("supportState", "supported"); putString("selectionToken", selectionToken); putBoolean("isManifest", true)
       putBoolean("isProtected", false); putDouble("confidence", if (height > 0) 96.0 else 86.0)
-      if (bandwidth > 0) putString("videoCodec", "${bandwidth / 1000} kbps")
+      if (bandwidth > 0) putDouble("bitrate", bandwidth.toDouble())
+      if (codecs.isNotBlank()) {
+        putString("videoCodec", codecs.split(',').firstOrNull { !Regex("mp4a|ac-3|ec-3|opus|vorbis", RegexOption.IGNORE_CASE).containsMatchIn(it) }?.trim() ?: codecs)
+      }
+      if (audioCodec.isNotBlank()) putString("audioCodec", audioCodec)
+      language?.takeIf { it.isNotBlank() }?.let { putString("language", it) }
     }
   }
 }
@@ -489,4 +624,7 @@ private fun DownloadRecord.toWritableMap(): WritableMap = Arguments.createMap().
   startedAt?.let { putDouble("startedAt", it.toDouble()) }; completedAt?.let { putDouble("completedAt", it.toDouble()) }
   putInt("retryCount", retryCount); putString("failureCode", failureCode); putString("failureMessage", failureMessage); putString("hash", contentHash)
   putBoolean("hiddenFromDownloads", hiddenFromDownloads)
+  putString("assetId", assetId); putString("variantId", variantId); putString("protocol", protocol); putString("selectionToken", selectionToken)
+  putString("videoCodec", videoCodec); putString("audioCodec", audioCodec); putDouble("durationMs", durationMs.toDouble()); putString("audioMode", audioMode)
+  putString("flowId", flowId); putString("processingStage", processingStage); putDouble("playbackPositionMs", playbackPositionMs.toDouble()); putDouble("watchedPercent", watchedPercent)
 }

@@ -1,10 +1,11 @@
-Version 1.0.4
+Version 2.0.0
 
-- Keep download and player controls clear of Android navigation controls
-- Improve download streaming efficiency and local video playback controls
-- Block pop-up windows and common ad slots in the built-in browser; app ads are unchanged
-- Enable aggregate search and visited-site insights by default, with separate Settings controls
-- Include top search terms and most visited domains in the protected server dashboard
-- Improve download cancellation and clearing local app data
-- Keep browser state intact when moving between app sections
-- Continue using the full downloader free with no account or subscription
+- Review every detected media item and quality before downloading
+- Choose one or several distinct videos, edit filenames, and select a destination
+- Get more accurate HLS, DASH, and direct-file detection with clear unsupported reasons
+- Download supported adaptive video with its audio in one playable MP4
+- Resume interrupted transfers and see clear download and combining stages
+- Continue watching local media from the saved playback position
+- Keep every control clear of gesture navigation, three-button navigation, cutouts, ads, and the keyboard
+- Retain the full downloader for free with the same restrained ad strategy
+- Control anonymous performance and browser insights independently, or delete server analytics from Settings

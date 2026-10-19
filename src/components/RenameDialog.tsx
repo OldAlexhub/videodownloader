@@ -1,5 +1,6 @@
 import React, {useEffect, useState} from 'react';
-import {Modal, Pressable, StyleSheet, Text, TextInput, View} from 'react-native';
+import {KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View} from 'react-native';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {colors, radius, spacing} from '../theme';
 
 interface Props {
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function RenameDialog({visible, initialValue, onCancel, onSave}: Props) {
+  const insets = useSafeAreaInsets();
   const [value, setValue] = useState(initialValue);
   const [busy, setBusy] = useState(false);
   useEffect(() => setValue(initialValue), [initialValue, visible]);
@@ -19,8 +21,8 @@ export function RenameDialog({visible, initialValue, onCancel, onSave}: Props) {
     try { await onSave(value.trim()); } finally { setBusy(false); }
   };
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.backdrop}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel} statusBarTranslucent navigationBarTranslucent>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.backdrop, {paddingTop: Math.max(insets.top, spacing.xl), paddingBottom: Math.max(insets.bottom, spacing.xl)}]}>
         <View style={styles.dialog}>
           <Text style={styles.title}>Rename file</Text>
           <Text style={styles.help}>Keep the file extension so other apps can recognize the media type.</Text>
@@ -30,7 +32,7 @@ export function RenameDialog({visible, initialValue, onCancel, onSave}: Props) {
             <Pressable disabled={!value.trim() || busy} onPress={save} style={styles.primary}><Text style={styles.primaryText}>{busy ? 'Saving…' : 'Save'}</Text></Pressable>
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

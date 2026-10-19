@@ -13,15 +13,54 @@ export type DownloadStatus =
 
 export type MediaType = 'video' | 'audio' | 'image';
 
-export interface DetectedMedia {
+export type SourceProtocol = 'progressive' | 'hls' | 'dash';
+export type AudioMode = 'muxed' | 'separate' | 'none' | 'unknown';
+export type MediaInspectionState = 'probing' | 'ready' | 'unsupported' | 'protected' | 'expired';
+export type DetectionSource = 'element' | 'source' | 'fetch' | 'xhr' | 'navigation' | 'manifest' | 'link';
+
+export interface RawMediaCandidate {
+  candidateKey: string;
+  sourceUrl: string;
+  pageUrl: string;
+  documentId: string;
+  elementId?: string;
+  parentManifestUrl?: string;
+  title: string;
+  mimeType?: string;
+  contentLength?: number;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  posterUrl?: string;
+  detectionSource: DetectionSource;
+  active?: boolean;
+  prominent?: boolean;
+}
+
+export interface MediaVariant {
   id: string;
+  candidateKey?: string;
+  assetId?: string;
   groupKey: string;
   sourceUrl: string;
   pageUrl: string;
+  documentId?: string;
   title: string;
   mimeType: string;
   extension: string;
   mediaType: MediaType;
+  protocol?: SourceProtocol;
+  container?: string;
+  bitrate?: number;
+  durationMs?: number;
+  audioMode?: AudioMode;
+  inspectionState?: MediaInspectionState;
+  supportState?: 'supported' | 'unsupported';
+  unsupportedReason?: string;
+  detectionSource?: DetectionSource;
+  selectionToken?: string;
+  language?: string;
+  frameRate?: number;
   qualityLabel: string;
   resolution?: string;
   width?: number;
@@ -35,6 +74,28 @@ export interface DetectedMedia {
   isProtected?: boolean;
   confidence: number;
   headers?: Record<string, string>;
+}
+
+/** @deprecated Kept as a compatibility alias for the native bridge. */
+export type DetectedMedia = MediaVariant;
+
+export interface DetectedAsset {
+  id: string;
+  documentId: string;
+  title: string;
+  mediaType: MediaType;
+  thumbnailUrl?: string;
+  durationMs?: number;
+  prominence: number;
+  variants: MediaVariant[];
+}
+
+export interface DownloadSelection {
+  assetId: string;
+  variant: MediaVariant;
+  finalFilename?: string;
+  destinationUri?: string;
+  flowId: string;
 }
 
 export interface DownloadItem {
@@ -69,6 +130,17 @@ export interface DownloadItem {
   failureMessage?: string;
   hash?: string;
   hiddenFromDownloads?: boolean;
+  assetId?: string;
+  variantId?: string;
+  protocol?: SourceProtocol;
+  videoCodec?: string;
+  audioCodec?: string;
+  audioMode?: AudioMode;
+  durationMs?: number;
+  flowId?: string;
+  processingStage?: string;
+  playbackPositionMs?: number;
+  watchedPercent?: number;
 }
 
 export interface BrowserHistoryItem {
@@ -86,7 +158,7 @@ export interface Bookmark {
 }
 
 export interface AppSettings {
-  defaultQuality: 'ask' | 'best' | 'balanced' | 'smallest';
+  preferredQuality: 'best' | 'balanced' | 'smallest';
   parallelDownloads: 1 | 2 | 3 | 4;
   wifiOnly: boolean;
   resumeAutomatically: boolean;
@@ -103,7 +175,7 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  defaultQuality: 'ask',
+  preferredQuality: 'balanced',
   parallelDownloads: 2,
   wifiOnly: false,
   resumeAutomatically: true,

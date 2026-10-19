@@ -1,9 +1,9 @@
 import React, {useMemo, useState} from 'react';
-import {Alert, Modal, Pressable, StyleSheet, Text, TextInput, View} from 'react-native';
+import {Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View} from 'react-native';
 import {Clock3, FileAudio, FileImage, FileVideo, Grid2X2, List, MoreVertical, Search, Share2, Play, Edit3, FolderInput, Trash2, Info} from 'lucide-react-native';
 import {EmptyState} from '../components/EmptyState';
 import {RenameDialog} from '../components/RenameDialog';
-import {SafeScrollView} from '../components/ScreenContainer';
+import {SafeBottomSheet, SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {downloadManager} from '../native/DownloadManager';
 import type {DownloadItem, MediaType} from '../types';
@@ -31,6 +31,11 @@ export function LibraryScreen() {
       if (sort === 'size') return (b.actualBytes || 0) - (a.actualBytes || 0);
       return (b.completedAt || 0) - (a.completedAt || 0);
     }), [downloads, filter, query, sort]);
+  const continueWatching = useMemo(() => downloads
+    .filter(item => item.status === 'completed' && (item.mediaType === 'video' || item.mediaType === 'audio'))
+    .filter(item => (item.playbackPositionMs || 0) > 0 && (item.watchedPercent || 0) < 95)
+    .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0))
+    .slice(0, 8), [downloads]);
 
   const act = async (operation: () => Promise<unknown>) => {
     try { await operation(); await refreshDownloads(); } catch (error) { Alert.alert('Action unavailable', error instanceof Error ? error.message : 'Please try again.'); }
@@ -58,6 +63,19 @@ export function LibraryScreen() {
           <Pressable onPress={() => setSort(current => current === 'newest' ? 'oldest' : current === 'oldest' ? 'name' : current === 'name' ? 'size' : 'newest')} style={styles.sort}><Clock3 color={colors.blue700} size={15} /><Text style={styles.sortText}>{sort}</Text></Pressable>
         </SafeScrollView>
       </View>
+      {continueWatching.length ? (
+        <View style={styles.continueSection}>
+          <Text style={styles.continueTitle}>Continue Watching</Text>
+          <ScrollView horizontal contentContainerStyle={styles.continueList} showsHorizontalScrollIndicator={false}>
+            {continueWatching.map(item => (
+              <Pressable key={item.id} onPress={() => act(() => downloadManager.open(item.id))} style={styles.continueCard}>
+                <View style={styles.continueIcon}><Play color={colors.white} fill={colors.white} size={18} /></View>
+                <View style={styles.continueCopy}><Text numberOfLines={1} style={styles.continueName}>{item.title || item.finalFilename}</Text><Text style={styles.continueProgress}>{Math.round(item.watchedPercent || 0)}% watched</Text></View>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
       {completed.length === 0 ? <EmptyState title={query ? 'No matching media' : 'No downloaded media yet'} message={query ? 'Try another search or filter.' : 'Completed videos, audio, and images will be organized here.'} action={query ? undefined : 'Browse media'} onAction={query ? undefined : () => openBrowser()} /> : (
         <SafeScrollView contentContainerStyle={[styles.content, grid && styles.grid]}>
           {completed.map(item => <LibraryCard key={item.id} item={item} grid={grid} onOpen={() => act(() => downloadManager.open(item.id))} onMore={() => setSelected(item)} />)}
@@ -76,7 +94,7 @@ function LibraryCard({item, grid, onOpen, onMore}: {item: DownloadItem; grid: bo
 
 function LibraryActions({item, onClose, onOpen, onShare, onRename, onMove, onDelete}: {item?: DownloadItem; onClose: () => void; onOpen: () => void; onShare: () => void; onRename: () => void; onMove: () => void; onDelete: () => void}) {
   const action = (icon: React.ReactNode, text: string, handler: () => void, danger = false) => <Pressable onPress={handler} style={styles.action}><View style={styles.actionIcon}>{icon}</View><Text style={[styles.actionText, danger && {color: colors.danger}]}>{text}</Text></Pressable>;
-  return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose}><Pressable onPress={onClose} style={styles.backdrop}><View style={styles.sheet} onStartShouldSetResponder={() => true}><Text numberOfLines={2} style={styles.sheetTitle}>{item?.finalFilename}</Text>{action(<Play color={colors.blue700} />, item?.mediaType === 'image' ? 'Open' : 'Play', onOpen)}{action(<Share2 color={colors.blue700} />, 'Share', onShare)}{action(<Edit3 color={colors.blue700} />, 'Rename', onRename)}{action(<FolderInput color={colors.blue700} />, 'Move to folder', onMove)}<View style={styles.action}><View style={styles.actionIcon}><Info color={colors.blue700} /></View><Text style={styles.actionText}>{item?.mimeType} · {formatBytes(item?.actualBytes)}</Text></View>{action(<Trash2 color={colors.danger} />, 'Delete', onDelete, true)}</View></Pressable></Modal>;
+  return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent><Pressable onPress={onClose} style={styles.backdrop}><SafeBottomSheet style={styles.sheet} onStartShouldSetResponder={() => true}><Text numberOfLines={2} style={styles.sheetTitle}>{item?.finalFilename}</Text>{action(<Play color={colors.blue700} />, item?.mediaType === 'image' ? 'Open' : 'Play', onOpen)}{action(<Share2 color={colors.blue700} />, 'Share', onShare)}{action(<Edit3 color={colors.blue700} />, 'Rename', onRename)}{action(<FolderInput color={colors.blue700} />, 'Move to folder', onMove)}<View style={styles.action}><View style={styles.actionIcon}><Info color={colors.blue700} /></View><Text style={styles.actionText}>{item?.mimeType} · {formatBytes(item?.actualBytes)}</Text></View>{action(<Trash2 color={colors.danger} />, 'Delete', onDelete, true)}</SafeBottomSheet></Pressable></Modal>;
 }
 
 const styles = StyleSheet.create({
@@ -85,16 +103,24 @@ const styles = StyleSheet.create({
   titleRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'},
   title: {fontSize: 25, fontWeight: '900', color: colors.ink},
   subtitle: {fontSize: 12, color: colors.muted, marginTop: 3},
-  viewToggle: {width: 40, height: 40, borderRadius: radius.md, backgroundColor: colors.sky100, alignItems: 'center', justifyContent: 'center'},
+  viewToggle: {width: 48, height: 48, borderRadius: radius.md, backgroundColor: colors.sky100, alignItems: 'center', justifyContent: 'center'},
   searchBar: {height: 45, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, paddingHorizontal: spacing.md, marginTop: spacing.md},
   searchInput: {flex: 1, fontSize: 14, color: colors.ink, paddingVertical: 0},
   filters: {paddingVertical: spacing.md, gap: 8},
-  filter: {paddingHorizontal: 15, paddingVertical: 8, borderRadius: radius.round, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line},
+  filter: {minHeight: 48, justifyContent: 'center', paddingHorizontal: 15, borderRadius: radius.round, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line},
   filterActive: {backgroundColor: colors.blue700, borderColor: colors.blue700},
   filterText: {fontSize: 12, fontWeight: '800', color: colors.muted},
   filterTextActive: {color: colors.white},
-  sort: {flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, borderRadius: radius.round, borderWidth: 1, borderColor: '#B9D4F0'},
+  sort: {minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, borderRadius: radius.round, borderWidth: 1, borderColor: '#B9D4F0'},
   sortText: {fontSize: 11, fontWeight: '800', color: colors.blue700, textTransform: 'capitalize'},
+  continueSection: {backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.line, paddingTop: spacing.md},
+  continueTitle: {fontSize: 15, fontWeight: '900', color: colors.ink, paddingHorizontal: spacing.lg},
+  continueList: {padding: spacing.md, gap: spacing.sm},
+  continueCard: {width: 210, minHeight: 64, flexDirection: 'row', alignItems: 'center', padding: spacing.sm, borderWidth: 1, borderColor: colors.line, borderRadius: radius.md, backgroundColor: colors.surface},
+  continueIcon: {width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.blue700},
+  continueCopy: {flex: 1, paddingLeft: spacing.sm},
+  continueName: {fontSize: 12, fontWeight: '800', color: colors.ink},
+  continueProgress: {fontSize: 11, color: colors.muted, marginTop: 4},
   content: {padding: spacing.md},
   grid: {flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md},
   card: {backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, borderRadius: radius.lg, overflow: 'hidden'},
@@ -107,9 +133,9 @@ const styles = StyleSheet.create({
   cardTitle: {fontSize: 13, lineHeight: 18, fontWeight: '800', color: colors.ink},
   cardMeta: {fontSize: 10, color: colors.muted, marginTop: 5},
   cardDate: {fontSize: 10, color: colors.muted, marginTop: 3},
-  more: {position: 'absolute', right: 3, top: 3, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.9)', alignItems: 'center', justifyContent: 'center'},
+  more: {position: 'absolute', right: 0, top: 0, width: 48, height: 48, borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.9)', alignItems: 'center', justifyContent: 'center'},
   backdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(3,16,43,0.5)'},
-  sheet: {backgroundColor: colors.white, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 30},
+  sheet: {backgroundColor: colors.white, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg},
   sheetTitle: {fontSize: 16, lineHeight: 22, fontWeight: '900', color: colors.ink, padding: spacing.sm, marginBottom: spacing.sm},
   action: {height: 52, flexDirection: 'row', alignItems: 'center', gap: spacing.md},
   actionIcon: {width: 34, alignItems: 'center'},

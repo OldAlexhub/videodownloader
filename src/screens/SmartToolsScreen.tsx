@@ -2,7 +2,7 @@ import React, {useEffect, useMemo, useState} from 'react';
 import {Alert, Modal, Pressable, StyleSheet, Text, View} from 'react-native';
 import {CopyCheck, Database, FileCheck2, FileVideo, Gauge, HardDrive, Search, Sparkles, Trash2, X} from 'lucide-react-native';
 import {EmptyState} from '../components/EmptyState';
-import {SafeScrollView} from '../components/ScreenContainer';
+import {SafeModalScreen, SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {downloadManager} from '../native/DownloadManager';
 import type {DownloadItem} from '../types';
@@ -78,7 +78,7 @@ function StorageRow({icon, label, value}: {icon: React.ReactNode; label: string;
 }
 
 function DuplicateModal({visible, groups, onClose, onOpen, onDelete}: {visible: boolean; groups: DownloadItem[][]; onClose: () => void; onOpen: (item: DownloadItem) => void; onDelete: (item: DownloadItem) => void}) {
-  return <Modal visible={visible} animationType="slide" onRequestClose={onClose}><View style={styles.modal}><View style={styles.modalHeader}><View><Text style={styles.modalTitle}>Duplicate Finder</Text><Text style={styles.modalSubtitle}>No files are removed automatically.</Text></View><Pressable onPress={onClose} style={styles.close}><X color={colors.ink} size={22} /></Pressable></View>{groups.length === 0 ? <EmptyState icon={<Search color={colors.blue600} size={32} />} title="No likely duplicates" message="The completed library does not contain matching hashes or source and size pairs." /> : <SafeScrollView>{groups.map((group, index) => <View key={`${group[0].id}-${index}`} style={styles.duplicateGroup}><Text style={styles.duplicateTitle}>Matching group · {group.length} files</Text>{group.map(item => <View key={item.id} style={styles.duplicateRow}><View style={styles.featureCopy}><Text numberOfLines={1} style={styles.fileName}>{item.finalFilename}</Text><Text style={styles.fileMeta}>{formatBytes(item.actualBytes)}</Text></View><Pressable onPress={() => onOpen(item)} style={styles.smallButton}><Text style={styles.smallButtonText}>Open</Text></Pressable><Pressable onPress={() => onDelete(item)} style={styles.deleteButton}><Trash2 color={colors.danger} size={17} /></Pressable></View>)}</View>)}</SafeScrollView>}</View></Modal>;
+  return <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent><SafeModalScreen style={styles.modal}><View style={styles.modalHeader}><View><Text style={styles.modalTitle}>Duplicate Finder</Text><Text style={styles.modalSubtitle}>No files are removed automatically.</Text></View><Pressable onPress={onClose} style={styles.close}><X color={colors.ink} size={22} /></Pressable></View>{groups.length === 0 ? <EmptyState icon={<Search color={colors.blue600} size={32} />} title="No likely duplicates" message="The completed library does not contain matching hashes or source and size pairs." /> : <SafeScrollView>{groups.map((group, index) => <View key={`${group[0].id}-${index}`} style={styles.duplicateGroup}><Text style={styles.duplicateTitle}>Matching group · {group.length} files</Text>{group.map(item => <View key={item.id} style={styles.duplicateRow}><View style={styles.featureCopy}><Text numberOfLines={1} style={styles.fileName}>{item.finalFilename}</Text><Text style={styles.fileMeta}>{formatBytes(item.actualBytes)}</Text></View><Pressable onPress={() => onOpen(item)} style={styles.smallButton}><Text style={styles.smallButtonText}>Open</Text></Pressable><Pressable onPress={() => onDelete(item)} style={styles.deleteButton}><Trash2 color={colors.danger} size={17} /></Pressable></View>)}</View>)}</SafeScrollView>}</SafeModalScreen></Modal>;
 }
 
 const styles = StyleSheet.create({
@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
   featureCopy: {flex: 1, paddingHorizontal: spacing.md},
   featureTitle: {fontSize: 15, fontWeight: '900', color: colors.ink},
   featureBody: {fontSize: 12, lineHeight: 17, color: colors.muted, marginTop: 3},
-  openButton: {backgroundColor: colors.blue700, paddingHorizontal: 12, paddingVertical: 9, borderRadius: radius.md},
+  openButton: {minHeight: 48, justifyContent: 'center', backgroundColor: colors.blue700, paddingHorizontal: 12, borderRadius: radius.md},
   openButtonText: {fontSize: 11, fontWeight: '800', color: colors.white},
   statePill: {paddingHorizontal: 12, paddingVertical: 7, borderRadius: radius.round, backgroundColor: colors.surface},
   statePillOn: {backgroundColor: colors.successSoft},
@@ -102,13 +102,13 @@ const styles = StyleSheet.create({
   storageRow: {height: 43, flexDirection: 'row', alignItems: 'center', gap: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line},
   storageLabel: {flex: 1, fontSize: 13, fontWeight: '700', color: colors.ink},
   storageValue: {fontSize: 12, color: colors.muted},
-  clearButton: {height: 45, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: spacing.md, borderRadius: radius.md, backgroundColor: colors.dangerSoft},
+  clearButton: {height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: spacing.md, borderRadius: radius.md, backgroundColor: colors.dangerSoft},
   clearText: {fontSize: 12, fontWeight: '800', color: colors.danger},
-  modal: {flex: 1, backgroundColor: colors.surface, paddingTop: 20},
+  modal: {flex: 1, backgroundColor: colors.surface},
   modalHeader: {height: 70, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg},
   modalTitle: {fontSize: 23, fontWeight: '900', color: colors.ink},
   modalSubtitle: {fontSize: 11, color: colors.muted, marginTop: 3},
-  close: {padding: spacing.sm},
+  close: {width: 48, height: 48, alignItems: 'center', justifyContent: 'center'},
   duplicateGroup: {backgroundColor: colors.white, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: spacing.md, marginBottom: spacing.md},
   duplicateTitle: {fontSize: 13, fontWeight: '900', color: colors.ink, marginBottom: spacing.sm},
   duplicateRow: {minHeight: 58, flexDirection: 'row', alignItems: 'center', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line},

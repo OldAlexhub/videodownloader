@@ -27,19 +27,24 @@ class InterstitialController {
         // Invalid frequency state is safely reset.
       }
     }
-    this.ad.addAdEventListener(AdEventType.LOADED, () => { this.loaded = true; });
+    this.ad.addAdEventListener(AdEventType.LOADED, () => { this.loaded = true; downloadManager.trackEvent('ad_load', {format: 'interstitial', placement: 'natural_transition'}).catch(() => undefined); });
     this.ad.addAdEventListener(AdEventType.CLOSED, () => {
       this.showing = false;
       this.loaded = false;
       this.ad.load();
     });
-    this.ad.addAdEventListener(AdEventType.ERROR, () => {
+    this.ad.addAdEventListener(AdEventType.ERROR, error => {
       this.showing = false;
       this.loaded = false;
+      downloadManager.trackEvent('ad_failure', {format: 'interstitial', placement: 'natural_transition', errorCode: String(error.code || 'unknown').replace(/[^a-z0-9_.-]/gi, '_')}).catch(() => undefined);
     });
     this.ad.addAdEventListener(AdEventType.IMPRESSION, () => {
       downloadManager.trackEvent('ad_impression', {format: 'interstitial', placement: 'natural_transition'}).catch(() => undefined);
     });
+    this.ad.addAdEventListener(AdEventType.PAID, paid => {
+      downloadManager.trackEvent('ad_paid', {format: 'interstitial', placement: 'natural_transition', currency: paid.currency, micros: Number(paid.valueMicros || Math.round(paid.value * 1_000_000))}).catch(() => undefined);
+    });
+    downloadManager.trackEvent('ad_request', {format: 'interstitial', placement: 'natural_transition'}).catch(() => undefined);
     this.ad.load();
   }
 

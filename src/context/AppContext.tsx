@@ -14,12 +14,16 @@ import type {
   AppSettings,
   Bookmark,
   BrowserHistoryItem,
+  DetectedAsset,
   DetectedMedia,
+  DownloadSelection,
   DownloadItem,
   TabKey,
 } from '../types';
 import {DEFAULT_SETTINGS} from '../types';
 import {downloadManager} from '../native/DownloadManager';
+import {groupMedia, upsertVariant} from '../utils/media';
+import {migrateSettings} from '../utils/settings';
 
 const STORAGE = {
   settings: '@vdms/settings/v1',
@@ -45,9 +49,10 @@ interface AppContextValue {
   clearBookmarks: () => Promise<void>;
   toggleBookmark: (title: string, url: string) => Promise<void>;
   detectedMedia: DetectedMedia[];
+  detectedAssets: DetectedAsset[];
   addDetectedMedia: (item: DetectedMedia) => void;
   clearDetectedMedia: () => void;
-  enqueueMedia: (item: DetectedMedia, cookie?: string, userAgent?: string) => Promise<void>;
+  enqueueSelections: (items: DownloadSelection[], userAgent?: string) => Promise<string[]>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -99,9 +104,9 @@ export function AppProvider({children}: PropsWithChildren) {
       AsyncStorage.getItem(STORAGE.history),
       AsyncStorage.getItem(STORAGE.bookmarks),
     ]).then(([storedSettings, storedHistory, storedBookmarks]) => {
-      const restoredSettings = {
-        ...DEFAULT_SETTINGS,
-        ...parseStored(storedSettings, {}),
+      const parsedSettings = parseStored<Record<string, unknown>>(storedSettings, {});
+      const restoredSettings: AppSettings = {
+        ...migrateSettings(parsedSettings),
         ...settingsPatchBeforeLoad.current,
       };
       settingsRef.current = restoredSettings;
@@ -130,7 +135,8 @@ export function AppProvider({children}: PropsWithChildren) {
   }, [downloads, settings.keepScreenAwake]);
 
   useEffect(() => {
-    const timer = setInterval(refreshDownloads, 1200);
+    const unsubscribe = downloadManager.subscribeToUpdates(() => refreshDownloads());
+    const timer = setInterval(refreshDownloads, 60_000);
     const shareTimer = setInterval(() => {
       downloadManager.initialSharedUrl().then(url => {
         if (url) {
@@ -147,6 +153,7 @@ export function AppProvider({children}: PropsWithChildren) {
     return () => {
       clearInterval(timer);
       clearInterval(shareTimer);
+      unsubscribe();
       subscription.remove();
     };
   }, [refreshDownloads]);
@@ -203,63 +210,27 @@ export function AppProvider({children}: PropsWithChildren) {
   }, []);
 
   const addDetectedMedia = useCallback((incoming: DetectedMedia) => {
-    setDetectedMedia(current => {
-      const existingIndex = current.findIndex(item =>
-        item.sourceUrl === incoming.sourceUrl ||
-        (item.groupKey === incoming.groupKey &&
-          item.qualityLabel === incoming.qualityLabel &&
-          item.mimeType === incoming.mimeType),
-      );
-      if (existingIndex >= 0) {
-        const existing = current[existingIndex];
-        if (incoming.confidence <= existing.confidence) {
-          return current;
-        }
-        const next = [...current];
-        next[existingIndex] = {...existing, ...incoming};
-        return next;
-      }
-      return [...current, incoming]
-        .filter(item => !(item.mediaType === 'image' && item.width && item.height && item.width * item.height < 120000))
-        .sort((a, b) => (b.height || 0) - (a.height || 0) || b.confidence - a.confidence)
-        .slice(0, 40);
-    });
+    setDetectedMedia(current => upsertVariant(current, incoming));
   }, []);
 
   const clearDetectedMedia = useCallback(() => setDetectedMedia([]), []);
 
-  const enqueueMedia = useCallback(async (
-    item: DetectedMedia,
-    cookie?: string,
-    userAgent?: string,
-  ) => {
-    if (item.isProtected) {
-      Alert.alert('Protected media', 'Protected media cannot be downloaded.');
-      return;
+  const enqueueSelections = useCallback(async (selections: DownloadSelection[], userAgent?: string) => {
+    const usable = selections.filter(selection => !selection.variant.isProtected && !['protected', 'unsupported', 'expired'].includes(selection.variant.inspectionState || 'ready'));
+    if (!usable.length) {
+      Alert.alert('Nothing to download', 'Choose at least one supported media option.');
+      return [];
     }
-    if (settings.duplicateDetection) {
-      const duplicate = downloads.find(download =>
-        download.status === 'completed' &&
-        (download.sourceUrl === item.sourceUrl ||
-          (item.estimatedBytes && download.actualBytes === item.estimatedBytes && download.title === item.title)),
-      );
-      if (duplicate) {
-        return new Promise<void>(resolve => {
-          Alert.alert('This file already exists', duplicate.finalFilename, [
-            {text: 'Cancel', style: 'cancel', onPress: () => resolve()},
-            {text: 'Open existing', onPress: () => { downloadManager.open(duplicate.id); resolve(); }},
-            {text: 'Download another copy', onPress: async () => {
-              await downloadManager.enqueue({media: item, cookie, userAgent, destinationUri: settings.destinationUri, wifiOnly: settings.wifiOnly, parallelDownloads: settings.parallelDownloads, resumeAutomatically: settings.resumeAutomatically, smartFilename: settings.smartFilename});
-              await refreshDownloads();
-              resolve();
-            }},
-          ]);
-        });
-      }
+    const duplicates = usable.filter(selection => downloads.some(download => download.status === 'completed' && download.sourceUrl === selection.variant.sourceUrl));
+    if (settings.duplicateDetection && duplicates.length) {
+      const confirmed = await new Promise<boolean>(resolve => Alert.alert(
+        'Some files already exist',
+        `${duplicates.length} selected ${duplicates.length === 1 ? 'item matches' : 'items match'} a completed download.`,
+        [{text: 'Cancel', style: 'cancel', onPress: () => resolve(false)}, {text: 'Download copies', onPress: () => resolve(true)}],
+      ));
+      if (!confirmed) return [];
     }
-    await downloadManager.enqueue({
-      media: item,
-      cookie,
+    const ids = await downloadManager.enqueueSelections(usable, {
       userAgent,
       destinationUri: settings.destinationUri,
       wifiOnly: settings.wifiOnly,
@@ -269,6 +240,7 @@ export function AppProvider({children}: PropsWithChildren) {
     });
     await refreshDownloads();
     setActiveTab('downloads');
+    return ids;
   }, [downloads, refreshDownloads, settings]);
 
   const openBrowser = useCallback((url?: string) => {
@@ -282,6 +254,7 @@ export function AppProvider({children}: PropsWithChildren) {
     setDetectedMedia([]);
   }, []);
 
+  const detectedAssets = useMemo(() => groupMedia(detectedMedia), [detectedMedia]);
   const value = useMemo<AppContextValue>(() => ({
     activeTab,
     setActiveTab,
@@ -300,13 +273,14 @@ export function AppProvider({children}: PropsWithChildren) {
     clearBookmarks,
     toggleBookmark,
     detectedMedia,
+    detectedAssets,
     addDetectedMedia,
     clearDetectedMedia,
-    enqueueMedia,
+    enqueueSelections,
   }), [
-    activeTab, browserTarget, browserResetKey, downloads, settings, history, bookmarks, detectedMedia,
+    activeTab, browserTarget, browserResetKey, downloads, settings, history, bookmarks, detectedMedia, detectedAssets,
     refreshDownloads, updateSettings, addHistory, clearHistory, clearBookmarks, toggleBookmark,
-    addDetectedMedia, clearDetectedMedia, enqueueMedia, openBrowser, clearBrowserSession,
+    addDetectedMedia, clearDetectedMedia, enqueueSelections, openBrowser, clearBrowserSession,
   ]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
