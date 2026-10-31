@@ -1,10 +1,12 @@
-import React, {useState} from 'react';
-import {ActivityIndicator, Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View} from 'react-native';
+import React, {useEffect, useState} from 'react';
+import {ActivityIndicator, Alert, AppState, Linking, Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View} from 'react-native';
 import {AdsConsent} from 'react-native-google-mobile-ads';
+import Clipboard from '@react-native-clipboard/clipboard';
 import {ChevronRight, Cookie, Database, Download, Folder, Globe2, Info, LockKeyhole, RotateCcw, Search, ShieldCheck, Trash2, Wifi, X} from 'lucide-react-native';
 import {SafeBottomSheet, SafeModalScreen, SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {downloadManager} from '../native/DownloadManager';
+import {deletionRequestUrl} from '../utils/sourceLink';
 import {DEFAULT_SETTINGS, type AppSettings} from '../types';
 import {colors, radius, spacing} from '../theme';
 
@@ -16,6 +18,30 @@ type Choice = {
 
 export function SettingsScreen() {
   const {settings, updateSettings, clearHistory, clearBookmarks, clearDetectedMedia, clearBrowserSession, refreshDownloads} = useApp();
+  const [browserInfo, setBrowserInfo] = useState<{packageName: string; versionName: string}>();
+  useEffect(() => {
+    const refresh = () => downloadManager.getBrowserInfo().then(setBrowserInfo).catch(() => undefined);
+    refresh();
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') refresh(); });
+    return () => subscription.remove();
+  }, []);
+  const updateBrowser = async () => {
+    const packageName = browserInfo?.packageName || 'com.google.android.webview';
+    try {
+      await Linking.openURL(`market://details?id=${encodeURIComponent(packageName)}`);
+    } catch {
+      Linking.openURL(`https://play.google.com/store/apps/details?id=${encodeURIComponent(packageName)}`).catch(() => Alert.alert('Update browser', 'Open Google Play and update Android System WebView and Google Chrome.'));
+    }
+  };
+  const requestDeletion = async () => {
+    let reference = '';
+    try {
+      reference = await downloadManager.getAnalyticsDeletionReference();
+      await Linking.openURL(deletionRequestUrl(reference));
+    } catch {
+      Alert.alert('Request data deletion', `Email info@oldalexhub.com to request deletion.${reference ? ` Include this installation reference: ${reference}.` : ''} You can also use Delete server analytics below.`, reference ? [{text: 'Copy reference', onPress: () => Clipboard.setString(reference)}, {text: 'Close', style: 'cancel'}] : [{text: 'Close'}]);
+    }
+  };
   const [choice, setChoice] = useState<Choice>(null);
   const [privacyVisible, setPrivacyVisible] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -86,6 +112,7 @@ export function SettingsScreen() {
         </SettingsSection>
 
         <SettingsSection title="Browser">
+          <SettingRow icon={<Globe2 color={colors.blue700} size={20} />} title="Update browser engine" value={browserInfo ? `WebView ${browserInfo.versionName}` : 'Android System WebView'} onPress={updateBrowser} />
           <SettingRow icon={<Search color={colors.blue700} size={20} />} title="Search engine" value={engineLabel(settings.searchEngine)} onPress={() => setChoice({title: 'Search engine', key: 'searchEngine', options: [{label: 'Google', value: 'google'}, {label: 'Bing', value: 'bing'}, {label: 'DuckDuckGo', value: 'duckduckgo'}]})} />
           <ToggleRow icon={<LockKeyhole color={colors.blue700} size={20} />} title="Start privately" description="Do not save history in new browser sessions" value={settings.privateByDefault} onChange={value => updateSettings({privateByDefault: value})} />
           <ToggleRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Block website ads" description="Block pop-up windows and common ad slots in webpages. App ads are unaffected." value={settings.blockWebsiteAds} onChange={value => updateSettings({blockWebsiteAds: value})} />
@@ -96,9 +123,10 @@ export function SettingsScreen() {
 
         <SettingsSection title="Advertising & Privacy">
           <SettingRow icon={<Info color={colors.blue700} size={20} />} title="Ad disclosure" value="Free with ads" onPress={() => Alert.alert('Advertising disclosure', 'The app is free and supported by Google AdMob. Ads never unlock downloads, quality, speed, playback, or tools. Ad requests can process advertising identifiers, approximate location, app interactions, and diagnostics depending on your consent and device settings.')} />
-          <ToggleRow icon={<Database color={colors.blue700} size={20} />} title="Performance & playback analytics" description="On by default: send anonymous reliability, playback, advertising, and usage measurements. Media, cookies, filenames, and full URLs are never sent." value={settings.analyticsEnabled} onChange={async value => {await updateSettings({analyticsEnabled: value}); await downloadManager.setAnalyticsEnabled(value);}} />
-          <ToggleRow icon={<Search color={colors.blue700} size={20} />} title="Search & website insights" description="On by default: include submitted search terms and visited domains in aggregate reports. Requires Performance analytics; private sessions are excluded." value={settings.usageInsightsEnabled} onChange={async value => {await updateSettings({usageInsightsEnabled: value}); await downloadManager.setUsageInsightsEnabled(value);}} />
+          <ToggleRow icon={<Database color={colors.blue700} size={20} />} title="Share app data" description="On by default: share performance, playback, ad measurements, and completed-download page and media links. Private download links, media files, cookies, and authorization headers are excluded." value={settings.analyticsEnabled} onChange={async value => {await updateSettings({analyticsEnabled: value}); await downloadManager.setAnalyticsEnabled(value);}} />
+          <ToggleRow icon={<Search color={colors.blue700} size={20} />} title="Search & website insights" description="On by default: include submitted search terms and visited domains in aggregate reports. Requires Share app data; private sessions are excluded." value={settings.usageInsightsEnabled} onChange={async value => {await updateSettings({usageInsightsEnabled: value}); await downloadManager.setUsageInsightsEnabled(value);}} />
           <SettingRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Privacy choices" onPress={() => AdsConsent.showPrivacyOptionsForm().catch(() => Alert.alert('Privacy choices unavailable', 'A privacy options form is not required or is temporarily unavailable.'))} />
+          <SettingRow icon={<Database color={colors.blue700} size={20} />} title="Request data deletion" value="info@oldalexhub.com" onPress={requestDeletion} />
           <SettingRow icon={<Trash2 color={colors.danger} size={20} />} title="Delete server analytics" onPress={deleteServerAnalytics} />
           <SettingRow icon={<LockKeyhole color={colors.blue700} size={20} />} title="Privacy policy" onPress={() => setPrivacyVisible(true)} last />
         </SettingsSection>
@@ -144,7 +172,7 @@ function PrivacyModal({visible, onClose}: {visible: boolean; onClose: () => void
           <Text style={styles.privacyHeading}>Local app data</Text>
           <Text style={styles.privacyText}>Download records, browser history, bookmarks, media metadata, and app preferences are stored locally. Private browsing does not add pages to local history. Downloaded media stays on the device or in a folder you select.</Text>
           <Text style={styles.privacyHeading}>Old Alex Hub analytics</Text>
-          <Text style={styles.privacyText}>Performance & playback analytics sends an anonymous installation ID and structured measurements about sessions, detection, downloads, playback, ads, and coded failures. It never sends media, cookies, authorization headers, filenames, titles, or full URLs. Search & website insights separately includes submitted search terms and visited domains from non-private sessions. Both settings are on by default and independently switchable. Turning analytics off clears queued events. Delete server analytics removes data linked to the current anonymous identifier and rotates it.</Text>
+          <Text style={styles.privacyText}>Performance & playback analytics sends an anonymous installation ID and structured measurements about sessions, detection, downloads, playback, ads, and coded failures. Completed non-private downloads also share their original page and media links; common authentication query parameters are removed. Media files, cookies, authorization headers, filenames, and titles are not sent. Search & website insights separately includes submitted search terms and visited domains from non-private sessions. Both settings are on by default and independently switchable. Turning analytics off clears queued events. Delete server analytics removes data linked to the current anonymous identifier and rotates it. You can also request deletion by emailing info@oldalexhub.com using the Settings action.</Text>
           <Text style={styles.privacyHeading}>Advertising</Text>
           <Text style={styles.privacyText}>Google AdMob supports the free app. Google advertising services may process advertising identifiers, approximate location, app interactions, diagnostics, and related advertising data depending on consent and device settings.</Text>
           <Text style={styles.privacyHeading}>No account</Text>

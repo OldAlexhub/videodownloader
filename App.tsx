@@ -46,13 +46,13 @@ function CurrentScreen() {
 function AnalyticsDisclosure() {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
-    AsyncStorage.getItem('v2-analytics-disclosure').then(value => setVisible(value !== 'seen')).catch(() => undefined);
+    AsyncStorage.getItem('v3-link-sharing-disclosure').then(value => setVisible(value !== 'seen')).catch(() => undefined);
   }, []);
   if (!visible) return null;
   return (
     <View accessibilityRole="summary" style={styles.disclosure}>
-      <Text style={styles.disclosureText}>Anonymous performance, playback, and browser insights are on. No media, cookies, filenames, or full URLs are sent. Change either setting anytime.</Text>
-      <Pressable onPress={() => {setVisible(false); AsyncStorage.setItem('v2-analytics-disclosure', 'seen').catch(() => undefined);}} style={styles.disclosureButton}><Text style={styles.disclosureButtonText}>Got it</Text></Pressable>
+      <Text style={styles.disclosureText}>Data sharing is on by default. When enabled, it includes app activity and completed non-private download links. Change sharing or request deletion in Settings.</Text>
+      <Pressable onPress={() => {setVisible(false); AsyncStorage.setItem('v3-link-sharing-disclosure', 'seen').catch(() => undefined);}} style={styles.disclosureButton}><Text style={styles.disclosureButtonText}>Got it</Text></Pressable>
     </View>
   );
 }

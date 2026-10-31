@@ -18,6 +18,7 @@ class DownloadDatabase private constructor(context: Context) :
         id TEXT PRIMARY KEY,
         source_url TEXT NOT NULL,
         page_url TEXT NOT NULL DEFAULT '',
+        private_download INTEGER NOT NULL DEFAULT 1,
         title TEXT NOT NULL,
         original_filename TEXT NOT NULL,
         final_filename TEXT NOT NULL,
@@ -73,6 +74,7 @@ class DownloadDatabase private constructor(context: Context) :
   }
 
   override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+    if (oldVersion < 6) db.execSQL("ALTER TABLE downloads ADD COLUMN private_download INTEGER NOT NULL DEFAULT 1")
     if (oldVersion < 2) {
       db.execSQL("ALTER TABLE downloads ADD COLUMN work_id TEXT")
     }
@@ -144,7 +146,7 @@ class DownloadDatabase private constructor(context: Context) :
 
   companion object {
     const val ACTION_DOWNLOADS_CHANGED = "com.oldalexhub.videodownloader.DOWNLOADS_CHANGED"
-    private const val VERSION = 5
+    private const val VERSION = 6
     @Volatile private var instance: DownloadDatabase? = null
 
     fun get(context: Context): DownloadDatabase = instance ?: synchronized(this) {
@@ -157,6 +159,7 @@ data class DownloadRecord(
   val id: String,
   val sourceUrl: String,
   val pageUrl: String,
+  val privateDownload: Boolean,
   val title: String,
   val originalFilename: String,
   val finalFilename: String,
@@ -218,6 +221,7 @@ data class DownloadRecord(
         id = text("id")!!,
         sourceUrl = text("source_url")!!,
         pageUrl = text("page_url") ?: "",
+        privateDownload = cursor.getInt(cursor.getColumnIndexOrThrow("private_download")) != 0,
         title = text("title")!!,
         originalFilename = text("original_filename")!!,
         finalFilename = text("final_filename")!!,

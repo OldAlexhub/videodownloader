@@ -18,14 +18,16 @@ Only download media you own, have permission to download, or that the content pr
 - AsyncStorage only for small preferences, bookmarks, browser history, consent state, and ad frequency state
 - Native SQLite for structured download and media records
 - Google Mobile Ads and UMP for advertising and privacy choices
-- Bounded, failure-tolerant analytics delivery to `https://vd.server.oldalexhub.com/v1/events`
+- Bounded, failure-tolerant analytics delivery to `https://vd.server.oldalexhub.com/v2/events/batch`
+- Open the original page for saved downloads from Downloads and Library
+- Device WebView identity with an installed-engine version and update shortcut in Settings
 
 No media file is proxied through an Old Alex Hub server. Download bytes flow directly from the source to the Android device.
 
 ## Requirements
 
 - Windows 10 or Windows 11
-- Node.js 22.11 or newer
+- Node.js 22.13 or newer
 - Python 3.10 or newer for release automation
 - Android Studio with its bundled JDK
 - Android SDK platform 36 or newer
@@ -121,11 +123,11 @@ Production identifiers:
 
 Debug builds use Google's official test app ID and test ad units. Release builds use the production IDs. UMP consent is gathered before ad requests are enabled.
 
-Banners collapse after an error. Native ads are labeled Sponsored. Interstitials are preloaded and can appear only at a natural transition after at least two completed downloads, three meaningful transitions, eight minutes between impressions, and no more than four times in one session. If an ad is unavailable, navigation continues immediately.
+Banners collapse after an error and reserve space again when retrying. Native ads are labeled Sponsored. Failed ad loads retry with a 30-second to five-minute backoff while the app is active. Interstitials are preloaded and can appear only at a natural transition after at least two completed downloads, three meaningful transitions, eight minutes between impressions, and no more than four times in one session. If an ad is unavailable, navigation continues immediately. Dashboard load rate (loads/requests) and show rate (impressions/loads) are app telemetry estimates; AdMob reporting remains authoritative.
 
 ## Analytics and backend
 
-The analytics base URL is `https://vd.server.oldalexhub.com`. The app posts one JSON event at a time to `/v1/events` with a four-second connection and read timeout. A bounded local queue keeps at most 100 events. Failures never block browser, download, library, player, or ad flows.
+The analytics base URL is `https://vd.server.oldalexhub.com`. The app posts batches to `/v2/events/batch`. A bounded local queue keeps at most 500 events. Failures never block browser, download, library, player, or ad flows. Deploy the updated sibling server before releasing this app: its completed-download schema accepts the new source links.
 
 The production backend implementation is in the sibling [`server`](../server) repository. It includes the ingestion API, PostgreSQL event storage and retention indexes, local IP geolocation, authenticated reporting APIs, an admin dashboard, automated tests, Docker deployment files, and an Nginx configuration for `vd.server.oldalexhub.com`.
 
@@ -133,14 +135,14 @@ Events can contain:
 
 - Random installation ID for approximate unique-user counts. The server stores only its keyed HMAC hash.
 - Event time, app version, Android API level, locale, and time zone
-- Download title and filename as text
-- Source domain, never the full signed URL
+- Download metadata allowed by the event schema (legacy events may include title and filename)
+- Source domain and, for completed non-private downloads, original-page and media links with fragments and common credential/signature parameters removed
 - Media type, actual source quality, bytes, result, duration, and failure code
 - Ad format and placement impression events
 
-Performance analytics and Search & website insights are on by default and can each be disabled in Settings. When both are enabled, submitted browser search terms and visited website domains are sent for aggregate top-term and top-site reporting. Private sessions are excluded. Full visited URLs, paths, and query strings are never sent, and individual search and site values are hidden in the recent-event dashboard. Disabling Search & website insights removes queued search and site events.
+Share app data and Search & website insights are on by default and can each be disabled in Settings; existing opt-outs are preserved. When both are enabled, submitted browser search terms and visited website domains are sent for aggregate top-term and top-site reporting. Private sessions are excluded from these insights. Browser visit events contain domains rather than full URLs; completed non-private downloads separately include sanitized source links. Individual search and site values are hidden in the recent-event dashboard. Disabling Search & website insights removes queued search and site events.
 
-The backend may derive approximate city and country from the request IP and then discards the IP without storing it. The app does not request Android location permission. Media bytes, cookies, authorization headers, browsing history, full source URLs, and page content are never included in analytics. Users can disable Performance analytics in Settings, which clears the pending analytics queue.
+The backend may derive approximate city and country from the request IP and then discards the IP without storing it. The app does not request Android location permission. Media bytes, cookies, authorization headers, local browsing history, and page content are not included in analytics. Users can disable Share app data in Settings, which clears the pending analytics queue. Request data deletion opens an email draft to info@oldalexhub.com with the installation reference; Delete server analytics provides immediate in-app deletion.
 
 Expected event endpoint response: any HTTP 2xx status acknowledges the event. Other responses leave the event queued for a later app session.
 

@@ -6,6 +6,7 @@ interface EnqueueOptions {
   media: DetectedMedia;
   cookie?: string;
   userAgent?: string;
+  privateMode?: boolean;
   destinationUri?: string;
   wifiOnly?: boolean;
   parallelDownloads?: number;
@@ -44,6 +45,8 @@ interface NativeDownloadManagerShape {
   setKeepScreenAwake(enabled: boolean): Promise<boolean>;
   deleteServerAnalytics?(): Promise<boolean>;
   configureTelemetry?(revision: string, sampleRate: number, batchSize: number): Promise<boolean>;
+  getAnalyticsDeletionReference(): Promise<string>;
+  getBrowserInfo(): Promise<{packageName: string; versionName: string; userAgent: string}>;
   getAppVersionInfo(): Promise<{versionCode: number; versionName: string; packageName: string}>;
 }
 
@@ -57,8 +60,10 @@ function requireNative(): NativeDownloadManagerShape {
 }
 
 export const downloadManager = {
+  getBrowserInfo: () => requireNative().getBrowserInfo(),
+  getAnalyticsDeletionReference: () => requireNative().getAnalyticsDeletionReference(),
   list: () => requireNative().listDownloads(),
-  enqueue: ({media, cookie, userAgent, destinationUri, wifiOnly, parallelDownloads, resumeAutomatically, smartFilename, finalFilename, flowId}: EnqueueOptions) => {
+  enqueue: ({media, cookie, userAgent, privateMode, destinationUri, wifiOnly, parallelDownloads, resumeAutomatically, smartFilename, finalFilename, flowId}: EnqueueOptions) => {
     const sourceBase = (() => {
       try { return decodeURIComponent(new URL(media.sourceUrl).pathname.split('/').pop() || 'download').replace(/\.[a-z0-9]{2,8}$/i, ''); }
       catch { return 'download'; }
@@ -71,6 +76,7 @@ export const downloadManager = {
       finalFilename: cleanFilename(suggested, media.extension),
       cookie: cookie || '',
       userAgent: userAgent || '',
+      privateMode: Boolean(privateMode),
       referer: media.pageUrl,
       destinationUri: destinationUri || '',
       wifiOnly: Boolean(wifiOnly),
@@ -101,6 +107,7 @@ export const downloadManager = {
         finalFilename: cleanFilename(suggested, media.extension),
         cookie: options.cookie || '',
         userAgent: options.userAgent || '',
+        privateMode: Boolean(options.privateMode),
         referer: media.pageUrl,
         destinationUri: selection.destinationUri || options.destinationUri || '',
         wifiOnly: Boolean(options.wifiOnly),

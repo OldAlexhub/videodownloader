@@ -97,6 +97,10 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       })
       val finished = database.get(id) ?: current
       Telemetry.record(applicationContext, "download_completed", JSONObject().apply {
+        if (!finished.privateDownload) {
+          Telemetry.shareableLink(finished.pageUrl)?.let { put("pageUrl", it) }
+          Telemetry.shareableLink(finished.sourceUrl)?.let { put("sourceUrl", it) }
+        }
         put("sourceHost", runCatching { Uri.parse(finished.sourceUrl).host }.getOrNull())
         put("mediaType", finished.mediaType)
         put("protocol", finished.protocol)

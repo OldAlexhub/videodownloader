@@ -52,7 +52,8 @@ interface AppContextValue {
   detectedAssets: DetectedAsset[];
   addDetectedMedia: (item: DetectedMedia) => void;
   clearDetectedMedia: () => void;
-  enqueueSelections: (items: DownloadSelection[], userAgent?: string) => Promise<string[]>;
+  rejectDetectedMedia: (url: string) => void;
+  enqueueSelections: (items: DownloadSelection[], userAgent?: string, privateMode?: boolean) => Promise<string[]>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -213,9 +214,13 @@ export function AppProvider({children}: PropsWithChildren) {
     setDetectedMedia(current => upsertVariant(current, incoming));
   }, []);
 
+  const rejectDetectedMedia = useCallback((url: string) => setDetectedMedia(current => {
+    const rejectedAssets = new Set(current.filter(item => item.sourceUrl === url).map(item => item.assetId).filter(Boolean));
+    return current.filter(item => item.sourceUrl !== url && !rejectedAssets.has(item.assetId));
+  }), []);
   const clearDetectedMedia = useCallback(() => setDetectedMedia([]), []);
 
-  const enqueueSelections = useCallback(async (selections: DownloadSelection[], userAgent?: string) => {
+  const enqueueSelections = useCallback(async (selections: DownloadSelection[], userAgent?: string, privateMode = false) => {
     const usable = selections.filter(selection => !selection.variant.isProtected && !['protected', 'unsupported', 'expired'].includes(selection.variant.inspectionState || 'ready'));
     if (!usable.length) {
       Alert.alert('Nothing to download', 'Choose at least one supported media option.');
@@ -232,6 +237,7 @@ export function AppProvider({children}: PropsWithChildren) {
     }
     const ids = await downloadManager.enqueueSelections(usable, {
       userAgent,
+      privateMode,
       destinationUri: settings.destinationUri,
       wifiOnly: settings.wifiOnly,
       parallelDownloads: settings.parallelDownloads,
@@ -276,11 +282,12 @@ export function AppProvider({children}: PropsWithChildren) {
     detectedAssets,
     addDetectedMedia,
     clearDetectedMedia,
+    rejectDetectedMedia,
     enqueueSelections,
   }), [
     activeTab, browserTarget, browserResetKey, downloads, settings, history, bookmarks, detectedMedia, detectedAssets,
     refreshDownloads, updateSettings, addHistory, clearHistory, clearBookmarks, toggleBookmark,
-    addDetectedMedia, clearDetectedMedia, enqueueSelections, openBrowser, clearBrowserSession,
+    addDetectedMedia, clearDetectedMedia, rejectDetectedMedia, enqueueSelections, openBrowser, clearBrowserSession,
   ]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

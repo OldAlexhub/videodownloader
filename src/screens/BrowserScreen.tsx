@@ -54,7 +54,6 @@ interface ContextTarget {
 }
 
 const HOME = '';
-const USER_AGENT = 'Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Mobile Safari/537.36 VDMediaSaver/2.0.0';
 
 export function BrowserScreen() {
   const webView = useRef<any>(null);
@@ -67,6 +66,7 @@ export function BrowserScreen() {
     detectedMedia,
     addDetectedMedia,
     clearDetectedMedia,
+    rejectDetectedMedia,
     enqueueSelections,
     history,
     addHistory,
@@ -97,6 +97,7 @@ export function BrowserScreen() {
   const initialDocumentId = 'initial:0';
   const [documentId, setDocumentId] = useState(initialDocumentId);
   const documentIdRef = useRef(initialDocumentId);
+  const rejectedMedia = useRef(new Set<string>());
   const inspectedManifests = useRef(new Set<string>());
   const inspectedCandidates = useRef(new Set<string>());
   const lastStartedUrl = useRef('');
@@ -113,6 +114,7 @@ export function BrowserScreen() {
     const nextDocumentId = `${tabId}:${documentSequence.current}`;
     documentIdRef.current = nextDocumentId;
     setDocumentId(nextDocumentId);
+    rejectedMedia.current.clear();
     inspectedManifests.current.clear();
     inspectedCandidates.current.clear();
     setScanningCount(0);
@@ -218,6 +220,12 @@ export function BrowserScreen() {
   const handleMessage = (event: WebViewMessageEvent) => {
     try {
       const payload = JSON.parse(event.nativeEvent.data);
+      if (payload.type === 'mediaRejected' && typeof payload.url === 'string') {
+        rejectedMedia.current.add(payload.url);
+        rejectDetectedMedia(payload.url);
+        return;
+      }
+      if (payload.type === 'media' && rejectedMedia.current.has(payload.url)) return;
       if (payload.type === 'protected') {
         Alert.alert('Protected media', 'Protected media cannot be downloaded.');
         return;
@@ -301,7 +309,7 @@ export function BrowserScreen() {
           setScanningCount(count => count + 1);
           downloadManager.inspectManifest(found.sourceUrl, active.url, enriched.title)
             .then(items => {
-              if (candidateDocumentId !== documentIdRef.current) return;
+              if (candidateDocumentId !== documentIdRef.current || rejectedMedia.current.has(found.sourceUrl)) return;
               items.forEach((item, index) => addDetectedMedia({
                 ...item,
                 candidateKey: index === 0 ? enriched.candidateKey : `${manifestKey}:variant:${item.selectionToken || index}`,
@@ -313,7 +321,7 @@ export function BrowserScreen() {
               }));
             })
             .catch(manifestError => {
-              if (candidateDocumentId !== documentIdRef.current) return;
+              if (candidateDocumentId !== documentIdRef.current || rejectedMedia.current.has(found.sourceUrl)) return;
               const message = String(manifestError);
               addDetectedMedia({
                 ...enriched,
@@ -336,11 +344,11 @@ export function BrowserScreen() {
           addDetectedMedia({...enriched, inspectionState: 'probing'});
           setScanningCount(count => count + 1);
           downloadManager.inspectCandidates([enriched]).then(results => {
-            if (candidateDocumentId !== documentIdRef.current) return;
+            if (candidateDocumentId !== documentIdRef.current || rejectedMedia.current.has(found.sourceUrl)) return;
             const probed = results[0];
             addDetectedMedia(probed ? {...enriched, ...probed} : {...enriched, inspectionState: 'ready'});
           }).catch(() => {
-            if (candidateDocumentId === documentIdRef.current) addDetectedMedia({...enriched, inspectionState: 'ready'});
+            if (candidateDocumentId === documentIdRef.current && !rejectedMedia.current.has(found.sourceUrl)) addDetectedMedia({...enriched, inspectionState: 'ready'});
           }).finally(() => {
             if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
           });
@@ -543,7 +551,6 @@ export function BrowserScreen() {
           ref={webView}
           source={{uri: active.url}}
           style={styles.webView}
-          userAgent={USER_AGENT}
           javaScriptEnabled
           domStorageEnabled={!privateMode}
           cacheEnabled={!privateMode}
@@ -576,7 +583,7 @@ export function BrowserScreen() {
           }}
           onShouldStartLoadWithRequest={(request: {url: string; isTopFrame?: boolean}) => {
             const candidate = inferMediaFromUrl(request.url, active.url, pageTitle);
-            if (candidate) {
+            if (candidate && !rejectedMedia.current.has(candidate.sourceUrl)) {
               const candidateDocumentId = documentIdRef.current;
               const scopedAssetId = `${candidateDocumentId}:navigation:${candidate.sourceUrl.split('?')[0]}`;
               const scoped = {
@@ -594,10 +601,10 @@ export function BrowserScreen() {
                 inspectedManifests.current.add(inspectionKey);
                 setScanningCount(count => count + 1);
                 downloadManager.inspectManifest(candidate.sourceUrl, active.url, pageTitle).then(items => {
-                  if (candidateDocumentId !== documentIdRef.current) return;
+                  if (candidateDocumentId !== documentIdRef.current || rejectedMedia.current.has(candidate.sourceUrl)) return;
                   items.forEach((item, index) => addDetectedMedia({...item, candidateKey: index === 0 ? scoped.candidateKey : `${inspectionKey}:variant:${item.selectionToken || index}`, assetId: scopedAssetId, groupKey: scopedAssetId, documentId: candidateDocumentId, detectionSource: 'manifest', inspectionState: 'ready'}));
                 }).catch(manifestFailure => {
-                  if (candidateDocumentId === documentIdRef.current) addDetectedMedia({...scoped, inspectionState: 'unsupported', supportState: 'unsupported', unsupportedReason: /live/i.test(String(manifestFailure)) ? 'Live streams are not supported' : /protected|drm|encrypted/i.test(String(manifestFailure)) ? 'Protected media is not supported' : 'This stream could not be inspected'});
+                  if (candidateDocumentId === documentIdRef.current && !rejectedMedia.current.has(candidate.sourceUrl)) addDetectedMedia({...scoped, inspectionState: 'unsupported', supportState: 'unsupported', unsupportedReason: /live/i.test(String(manifestFailure)) ? 'Live streams are not supported' : /protected|drm|encrypted/i.test(String(manifestFailure)) ? 'Protected media is not supported' : 'This stream could not be inspected'});
                 }).finally(() => {
                   if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
                 });
@@ -605,7 +612,7 @@ export function BrowserScreen() {
                 inspectedCandidates.current.add(inspectionKey);
                 setScanningCount(count => count + 1);
                 downloadManager.inspectCandidates([scoped]).then(results => {
-                  if (candidateDocumentId === documentIdRef.current) addDetectedMedia(results[0] ? {...scoped, ...results[0]} : scoped);
+                  if (candidateDocumentId === documentIdRef.current && !rejectedMedia.current.has(candidate.sourceUrl)) addDetectedMedia(results[0] ? {...scoped, ...results[0]} : scoped);
                 }).finally(() => {
                   if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
                 });
@@ -658,7 +665,7 @@ export function BrowserScreen() {
             preset: settings.preferredQuality,
           }).catch(() => undefined);
         }}
-        onDownload={selections => enqueueSelections(selections, USER_AGENT)}
+        onDownload={selections => enqueueSelections(selections, undefined, privateMode)}
       />
       <TabsModal visible={tabsVisible} tabs={tabs} activeId={activeId} onClose={() => setTabsVisible(false)} onNew={newTab} onSelect={selectTab} onRemove={closeTab} />
       {contextTarget ? (

@@ -14,6 +14,8 @@ import android.provider.MediaStore
 import android.webkit.CookieManager
 import android.webkit.WebStorage
 import android.webkit.WebView
+import android.webkit.WebSettings
+import androidx.webkit.WebViewCompat
 import android.view.WindowManager
 import android.os.Handler
 import android.os.Looper
@@ -64,6 +66,25 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
   }
 
   override fun getName() = "VDDownloadManager"
+
+  @ReactMethod
+  fun getBrowserInfo(promise: Promise) {
+    Handler(Looper.getMainLooper()).post {
+      runCatching {
+        val provider = WebViewCompat.getCurrentWebViewPackage(context)
+        Arguments.createMap().apply {
+          putString("packageName", provider?.packageName ?: "com.google.android.webview")
+          putString("versionName", provider?.versionName ?: "Unknown")
+          putString("userAgent", WebSettings.getDefaultUserAgent(context))
+        }
+      }.fold(promise::resolve) { error -> promise.reject("E_WEBVIEW", error.message, error) }
+    }
+  }
+
+  @ReactMethod
+  fun getAnalyticsDeletionReference(promise: Promise) {
+    promise.resolve(Telemetry.deletionReference(context))
+  }
 
   @ReactMethod
   fun addListener(eventName: String) = Unit
@@ -119,7 +140,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
       val sourceName = Uri.parse(sourceUrl).lastPathSegment?.substringBefore('?')?.takeIf { it.isNotBlank() } ?: finalFilename
       val cookie = CookieManager.getInstance().getCookie(sourceUrl) ?: CookieManager.getInstance().getCookie(pageUrl).orEmpty()
       val headers = JSONObject().apply {
-        payload.string("userAgent").takeIf { it.isNotBlank() }?.let { put("User-Agent", it) }
+        put("User-Agent", payload.string("userAgent").ifBlank { WebSettings.getDefaultUserAgent(context) })
         pageUrl.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
         cookie.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
       }
@@ -127,6 +148,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         put("id", id)
         put("source_url", sourceUrl)
         put("page_url", pageUrl)
+        put("private_download", if (payload.boolean("privateMode")) 1 else 0)
         put("title", title)
         put("original_filename", sourceName)
         put("final_filename", finalFilename)
@@ -362,7 +384,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         connection.readTimeout = 10_000
         connection.setRequestProperty("Accept-Encoding", "identity")
         connection.setRequestProperty("Referer", pageUrl)
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36 VDMediaSaver/2.0")
+        connection.setRequestProperty("User-Agent", WebSettings.getDefaultUserAgent(context))
         CookieManager.getInstance().getCookie(sourceUrl)?.let { connection.setRequestProperty("Cookie", it) }
         if (connection.responseCode !in 200..299) error("The media manifest could not be loaded")
         val text = connection.inputStream.bufferedReader().use { it.readText() }
@@ -375,7 +397,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         if (!isHls && Regex("<MPD[^>]+type=[\"']dynamic[\"']", RegexOption.IGNORE_CASE).containsMatchIn(text)) error("Live streams are not supported")
         val requestHeaders = buildMap {
           put("Referer", pageUrl)
-          put("User-Agent", "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36 VDMediaSaver/2.0")
+          put("User-Agent", WebSettings.getDefaultUserAgent(context))
           CookieManager.getInstance().getCookie(sourceUrl)?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
         }
         val inspected = AdaptiveExporter.inspect(context, sourceUrl, requestHeaders)
@@ -409,7 +431,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
               connection.readTimeout = 10_000
               connection.requestMethod = method
               connection.setRequestProperty("Accept-Encoding", "identity")
-              connection.setRequestProperty("User-Agent", candidate.string("userAgent").ifBlank { "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome Mobile Safari/537.36 VDMediaSaver/2.0" })
+              connection.setRequestProperty("User-Agent", candidate.string("userAgent").ifBlank { WebSettings.getDefaultUserAgent(context) })
               pageUrl.takeIf { it.isNotBlank() }?.let { connection.setRequestProperty("Referer", it) }
               CookieManager.getInstance().getCookie(sourceUrl)?.let { connection.setRequestProperty("Cookie", it) }
             }

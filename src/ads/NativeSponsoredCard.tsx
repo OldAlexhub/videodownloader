@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from 'react';
-import {Image, StyleSheet, Text, View} from 'react-native';
+import {AppState, Image, StyleSheet, Text, View} from 'react-native';
 import {
   NativeAd,
   NativeAdView,
@@ -18,11 +18,17 @@ export function NativeSponsoredCard() {
   const [nativeAd, setNativeAd] = useState<NativeAd | null>(null);
 
   useEffect(() => {
+    setNativeAd(null);
     if (!adsReady) return;
-    downloadManager.trackEvent('ad_request', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
     let mounted = true;
     let loadedAd: NativeAd | null = null;
-    NativeAd.createForAdRequest(adConfig.native, {requestNonPersonalizedAdsOnly: false})
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+    const load = () => {
+      if (!mounted) return;
+      if (AppState.currentState !== 'active') { retryTimer = setTimeout(load, 30000); return; }
+      downloadManager.trackEvent('ad_request', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
+      NativeAd.createForAdRequest(adConfig.native, {requestNonPersonalizedAdsOnly: false})
       .then(ad => {
         loadedAd = ad;
         downloadManager.trackEvent('ad_load', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
@@ -38,14 +44,20 @@ export function NativeSponsoredCard() {
           ad.destroy();
         }
       })
-      .catch(error => downloadManager.trackEvent('ad_failure', {format: 'native', placement: 'browser_home', errorCode: String(error?.code || 'unknown').replace(/[^a-z0-9_.-]/gi, '_')}).catch(() => undefined));
+      .catch(error => {
+        downloadManager.trackEvent('ad_failure', {format: 'native', placement: 'browser_home', errorCode: String(error?.code || 'unknown').replace(/[^a-z0-9_.-]/gi, '_')}).catch(() => undefined);
+        if (mounted) retryTimer = setTimeout(load, Math.min(300000, 30000 * 2 ** Math.min(failures++, 4)));
+      });
+    };
+    load();
     return () => {
       mounted = false;
+      clearTimeout(retryTimer);
       loadedAd?.destroy();
     };
   }, [adsReady]);
 
-  if (!nativeAd) {
+  if (!adsReady || !nativeAd) {
     return null;
   }
 
@@ -69,7 +81,7 @@ export function NativeSponsoredCard() {
           </NativeAsset>
         </View>
       </View>
-      {nativeAd.mediaContent ? <NativeMediaView style={styles.media} resizeMode="cover" /> : null}
+      {nativeAd.mediaContent ? <NativeMediaView style={styles.media} resizeMode="contain" /> : null}
       <NativeAsset assetType={NativeAssetType.CALL_TO_ACTION}>
         <View style={styles.cta}><Text style={styles.ctaText}>{nativeAd.callToAction}</Text></View>
       </NativeAsset>
@@ -86,7 +98,9 @@ const styles = StyleSheet.create({
   copy: {flex: 1},
   headline: {fontSize: 15, lineHeight: 20, fontWeight: '800', color: colors.ink},
   body: {fontSize: 12, lineHeight: 17, color: colors.muted, marginTop: 2},
-  media: {height: 150, borderRadius: radius.md, marginTop: spacing.md},
+  // The SDK supplies the creative's aspect ratio; override it so portrait ads
+  // cannot shrink the MediaView below AdMob's 120 x 120 dp video minimum.
+  media: {width: '100%', height: 220, minWidth: 120, minHeight: 120, aspectRatio: undefined, borderRadius: radius.md, marginTop: spacing.md},
   cta: {marginTop: spacing.md, backgroundColor: colors.blue700, borderRadius: radius.md, paddingVertical: 10, alignItems: 'center'},
   ctaText: {fontSize: 13, fontWeight: '800', color: colors.white},
 });

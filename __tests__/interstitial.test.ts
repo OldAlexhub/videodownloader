@@ -1,0 +1,31 @@
+const mockListeners: Record<string, (...args: any[]) => void> = {};
+const mockAd = {load: jest.fn(), show: jest.fn().mockResolvedValue(undefined), addAdEventListener: jest.fn((event, handler) => {mockListeners[event] = handler;})};
+jest.mock('@react-native-async-storage/async-storage', () => ({getItem: jest.fn().mockResolvedValue(null), setItem: jest.fn().mockResolvedValue(undefined)}));
+jest.mock('react-native-google-mobile-ads', () => ({InterstitialAd: {createForAdRequest: () => mockAd}, AdEventType: {LOADED: 'loaded', ERROR: 'error', CLOSED: 'closed', IMPRESSION: 'impression', PAID: 'paid'}}));
+jest.mock('../src/config/ads', () => ({adConfig: {interstitial: 'test', maximumInterstitialsPerSession: 4, minimumActionsBetweenInterstitials: 3, minimumInterstitialIntervalMs: 480000}}));
+jest.mock('../src/native/DownloadManager', () => ({downloadManager: {trackEvent: jest.fn().mockResolvedValue(undefined)}}));
+import {AppState} from 'react-native';
+import {downloadManager} from '../src/native/DownloadManager';
+
+it('retries failures with backoff, counts each actual load, and reloads after closing', async () => {
+  const {interstitialController} = jest.requireActual('../src/ads/interstitial');
+  jest.useFakeTimers();
+  AppState.currentState = 'active';
+  await interstitialController.initialize();
+  expect(mockAd.load).toHaveBeenCalledTimes(1);
+  mockListeners.error({code: 'no-fill'});
+  await interstitialController.naturalBreak(false);
+  expect(mockAd.load).toHaveBeenCalledTimes(1);
+  jest.advanceTimersByTime(30000);
+  expect(mockAd.load).toHaveBeenCalledTimes(2);
+  mockListeners.error({code: 'network-error'});
+  jest.advanceTimersByTime(30000);
+  expect(mockAd.load).toHaveBeenCalledTimes(2);
+  jest.advanceTimersByTime(30000);
+  expect(mockAd.load).toHaveBeenCalledTimes(3);
+  mockListeners.loaded();
+  mockListeners.closed();
+  expect(mockAd.load).toHaveBeenCalledTimes(4);
+  expect(jest.mocked(downloadManager.trackEvent).mock.calls.filter(([event]) => event === 'ad_request')).toHaveLength(4);
+  jest.useRealTimers();
+});

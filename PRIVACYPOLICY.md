@@ -2,7 +2,7 @@
 
 Developer: Old Alex Hub
 
-Effective date: 10/01/2026
+Effective date: 10/30/2026
 
 Contact: info@oldalexhub.com
 
@@ -31,7 +31,7 @@ Users can clear browser history, cookies, cache, temporary fragments, and other 
 
 ## Old Alex Hub analytics
 
-When Performance analytics is enabled, the app sends limited events to `https://vd.server.oldalexhub.com`. These events are used for product analysis, user counts, reliability, download performance, and advertising performance.
+When Share app data is enabled (on by default), the app sends limited events to `https://vd.server.oldalexhub.com`. These events are used for product analysis, user counts, reliability, download performance, and advertising performance.
 
 Analytics events may include:
 
@@ -39,7 +39,7 @@ Analytics events may include:
 - Event time
 - App version and Android API level
 - Device locale and time zone
-- Download title and filename as text
+- Completed non-private download page and media links (common authentication query parameters and fragments removed); older 1.x clients may also send title and filename text
 - Source website domain
 - Media type, format, source quality, byte counts, duration, status, and failure code
 - Ad format and placement impression events
@@ -48,11 +48,13 @@ Analytics events may include:
 
 The analytics server may use the request IP address to derive an approximate city and country, then discards the IP without storing it. The server replaces the random installation identifier with a keyed HMAC hash before database storage. The app does not request Android location permission for analytics and does not send GPS coordinates.
 
-Performance analytics and Search & website insights are on by default and can each be disabled in Settings. Search & website insights records terms submitted through the browser address bar and website domains from non-private page visits only when both settings are enabled. Private sessions are excluded. The service receives the search term or site domain, not the visited page path or URL query string. These events appear in aggregate top-term and top-site reports; individual search and site values are hidden in the recent-event dashboard. Turning Search & website insights off removes queued search and site events from the device. Turning Performance analytics off clears the pending analytics queue.
+Share app data and Search & website insights are on by default and can each be disabled in Settings. Search & website insights records terms submitted through the browser address bar and website domains from non-private page visits only when both settings are enabled. Private sessions are excluded. The service receives the search term or site domain, not the visited page path or URL query string. These events appear in aggregate top-term and top-site reports; individual search and site values are hidden in the recent-event dashboard. Turning Search & website insights off removes queued search and site events from the device. Turning Share app data off clears the pending analytics queue.
 
-The app does not send downloaded media files, video or audio content, WebView cookies, authorization headers, or complete signed download URLs to the Old Alex Hub analytics service. Full browser history and page content are not sent.
+The app does not send downloaded media files, video or audio content, WebView cookies, authorization headers, or authentication query parameters from download URLs to the Old Alex Hub analytics service. Full browser history and page content are not sent.
 
-Analytics delivery has short timeouts and a bounded local queue. If the analytics server is unavailable, browsing, downloading, playback, local library access, and other features continue normally. Users can disable Performance analytics in Settings. Disabling it clears pending analytics events from the app queue.
+Analytics delivery has short timeouts and a bounded local queue. If the analytics server is unavailable, browsing, downloading, playback, local library access, and other features continue normally. Users can disable Share app data in Settings. Disabling it clears pending analytics events from the app queue.
+
+To request deletion, use Settings > Request data deletion. This opens a draft addressed to info@oldalexhub.com with your anonymous installation reference; you review and send it. You can also use Delete server analytics to remove records directly, including stored download links.
 
 ## Advertising
 

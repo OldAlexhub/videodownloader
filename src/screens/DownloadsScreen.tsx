@@ -1,7 +1,8 @@
 import React, {useMemo, useState} from 'react';
 import {Alert, Modal, Pressable, StyleSheet, Text, View} from 'react-native';
-import {Pause, Play, Share2, Trash2, Edit3, Info, XCircle} from 'lucide-react-native';
+import {ExternalLink, Pause, Play, Share2, Trash2, Edit3, Info, XCircle} from 'lucide-react-native';
 import {DownloadCard} from '../components/DownloadCard';
+import {originalDownloadLink} from '../utils/sourceLink';
 import {EmptyState} from '../components/EmptyState';
 import {RenameDialog} from '../components/RenameDialog';
 import {SafeBottomSheet, SafeScrollView} from '../components/ScreenContainer';
@@ -75,15 +76,15 @@ export function DownloadsScreen() {
           {failed.length > 0 ? <><SectionHeader title="Failed or cancelled" />{failed.map(card)}</> : null}
         </SafeScrollView>
       )}
-      <ActionSheet item={selected} onClose={() => setSelected(undefined)} onOpen={() => selected && perform(() => downloadManager.open(selected.id))} onShare={() => selected && perform(() => downloadManager.share(selected.id))} onRename={() => {setRename(selected); setSelected(undefined);}} onDelete={() => selected && Alert.alert('Delete download?', 'This removes the downloaded file from your device.', [{text: 'Cancel', style: 'cancel'}, {text: 'Delete', style: 'destructive', onPress: () => {perform(() => downloadManager.remove(selected.id, true)); setSelected(undefined);}}])} />
+      <ActionSheet item={selected} onSource={() => { const url = originalDownloadLink(selected); if (url) { setSelected(undefined); openBrowser(url); } else Alert.alert('Link unavailable', 'This older download has no saved web link.'); }} onClose={() => setSelected(undefined)} onOpen={() => selected && perform(() => downloadManager.open(selected.id))} onShare={() => selected && perform(() => downloadManager.share(selected.id))} onRename={() => {setRename(selected); setSelected(undefined);}} onDelete={() => selected && Alert.alert('Delete download?', 'This removes the downloaded file from your device.', [{text: 'Cancel', style: 'cancel'}, {text: 'Delete', style: 'destructive', onPress: () => {perform(() => downloadManager.remove(selected.id, true)); setSelected(undefined);}}])} />
       <RenameDialog visible={Boolean(rename)} initialValue={rename?.finalFilename || ''} onCancel={() => setRename(undefined)} onSave={async value => {if (rename) await perform(() => downloadManager.rename(rename.id, value)); setRename(undefined);}} />
     </View>
   );
 }
 
-function ActionSheet({item, onClose, onOpen, onShare, onRename, onDelete}: {item?: DownloadItem; onClose: () => void; onOpen: () => void; onShare: () => void; onRename: () => void; onDelete: () => void}) {
+function ActionSheet({item, onSource, onClose, onOpen, onShare, onRename, onDelete}: {item?: DownloadItem; onSource: () => void; onClose: () => void; onOpen: () => void; onShare: () => void; onRename: () => void; onDelete: () => void}) {
   const hasFile = item?.status === 'completed';
-  return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent><Pressable onPress={onClose} style={styles.sheetBackdrop}><SafeBottomSheet style={styles.sheet} onStartShouldSetResponder={() => true}><Text numberOfLines={2} style={styles.sheetTitle}>{item?.finalFilename}</Text><SheetAction icon={<Play color={colors.blue700} />} label="Open or play" onPress={onOpen} disabled={!hasFile} /><SheetAction icon={<Share2 color={colors.blue700} />} label="Share" onPress={onShare} disabled={!hasFile} /><SheetAction icon={<Edit3 color={colors.blue700} />} label="Rename" onPress={onRename} disabled={!hasFile} /><SheetAction icon={<Info color={colors.blue700} />} label={hasFile ? `${formatBytes(item?.actualBytes)} · ${formatDate(item?.completedAt)}` : item?.status === 'cancelled' ? 'Cancelled' : 'Download failed'} onPress={() => undefined} disabled /><SheetAction icon={<Trash2 color={colors.danger} />} label={hasFile ? 'Delete file' : 'Remove download'} onPress={onDelete} danger /></SafeBottomSheet></Pressable></Modal>;
+  return <Modal visible={Boolean(item)} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent><Pressable onPress={onClose} style={styles.sheetBackdrop}><SafeBottomSheet style={styles.sheet} onStartShouldSetResponder={() => true}><Text numberOfLines={2} style={styles.sheetTitle}>{item?.finalFilename}</Text><SheetAction icon={<Play color={colors.blue700} />} label="Open or play" onPress={onOpen} disabled={!hasFile} /><SheetAction icon={<ExternalLink color={colors.blue700} />} label="Open original link" onPress={onSource} /><SheetAction icon={<Share2 color={colors.blue700} />} label="Share" onPress={onShare} disabled={!hasFile} /><SheetAction icon={<Edit3 color={colors.blue700} />} label="Rename" onPress={onRename} disabled={!hasFile} /><SheetAction icon={<Info color={colors.blue700} />} label={hasFile ? `${formatBytes(item?.actualBytes)} · ${formatDate(item?.completedAt)}` : item?.status === 'cancelled' ? 'Cancelled' : 'Download failed'} onPress={() => undefined} disabled /><SheetAction icon={<Trash2 color={colors.danger} />} label={hasFile ? 'Delete file' : 'Remove download'} onPress={onDelete} danger /></SafeBottomSheet></Pressable></Modal>;
 }
 
 function SheetAction({icon, label, onPress, danger, disabled}: {icon: React.ReactNode; label: string; onPress: () => void; danger?: boolean; disabled?: boolean}) {

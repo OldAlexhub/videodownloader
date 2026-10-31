@@ -1,4 +1,5 @@
 import type {DetectedMedia} from '../types';
+import {AD_CONTAINER_SELECTOR, AD_HOSTS, AD_PATH, AD_QUERY_KEYS, isAdvertisingUrl} from './adDetection';
 
 const SEARCH_URLS = {
   google: 'https://www.google.com/search?q=',
@@ -42,7 +43,7 @@ export function inferMediaFromUrl(
   title: string,
   headers: Record<string, string> = {},
 ): DetectedMedia | null {
-  if (!/^https?:\/\//i.test(url) || /^blob:|^data:/i.test(url)) {
+  if (!/^https?:\/\//i.test(url) || isAdvertisingUrl(url)) {
     return null;
   }
   const clean = url.split('?')[0].split('#')[0];
@@ -65,7 +66,7 @@ export function inferMediaFromUrl(
     return null;
   }
   const lowerUrl = url.toLowerCase();
-  if (/sprite|favicon|icon|logo|avatar|emoji|pixel|tracking|beacon|ads?[/._-]/i.test(lowerUrl)) {
+  if (mediaType === 'image' && /(?:^|[/_.-])(?:sprite|favicon|icon|logo|avatar|emoji|pixel|tracking|beacon)(?:[/_.-]|$)/i.test(clean)) {
     return null;
   }
   const size = Number(headers['content-length'] || 0);
@@ -139,6 +140,24 @@ export const MEDIA_DETECTOR_SCRIPT = `
   if (window.__VDMS_INSTALLED__) return true;
   window.__VDMS_INSTALLED__ = true;
   const sent = new Map();
+  const adHosts = ${JSON.stringify(AD_HOSTS)};
+  const adPath = new RegExp(${JSON.stringify(AD_PATH.source)}, 'i');
+  const adQueryKeys = ${JSON.stringify(AD_QUERY_KEYS)};
+  const adContainerSelector = ${JSON.stringify(AD_CONTAINER_SELECTOR)};
+  const isAdUrl = (value) => {
+    try {
+      const url = new URL(value, document.baseURI);
+      return adHosts.some(host => url.hostname === host || url.hostname.endsWith('.' + host)) ||
+        adPath.test(decodeURIComponent(url.pathname)) || Array.from(url.searchParams.keys()).some(key => adQueryKeys.includes(key.toLowerCase()));
+    } catch (_) { return true; }
+  };
+  const isAdElement = node => Boolean(node && node.closest && node.closest(adContainerSelector));
+  const adPlaying = () => Boolean(document.querySelector('.html5-video-player.ad-showing,.vjs-ad-playing,.jw-flag-ads'));
+  const rejectAd = url => {
+    if (!url || !/^https?:/i.test(url)) return;
+    sent.delete(url);
+    window.ReactNativeWebView.postMessage(JSON.stringify({type:'mediaRejected', url:url}));
+  };
   const elementIds = new WeakMap();
   let elementSequence = 0;
   if (navigator.requestMediaKeySystemAccess) {
@@ -150,6 +169,7 @@ export const MEDIA_DETECTOR_SCRIPT = `
   }
   const emit = (url, meta) => {
     if (!url || !/^https?:/i.test(url)) return;
+    if (isAdUrl(url) || (meta && ['fetch', 'xhr'].includes(meta.source) && adPlaying())) { rejectAd(url); return; }
     const details = meta || {};
     const signature = JSON.stringify([details.elementId || '', details.type || '', details.width || 0, details.height || 0, Math.round(details.duration || 0), details.active || false, details.poster || '']);
     if (sent.get(url) === signature) return;
@@ -163,6 +183,7 @@ export const MEDIA_DETECTOR_SCRIPT = `
   const contextDetails = (rawTarget) => {
     const element = rawTarget && rawTarget.nodeType === 1 ? rawTarget : rawTarget && rawTarget.parentElement;
     if (!element || !element.closest) return null;
+    if (isAdElement(element)) return null;
     const link = element.closest('a[href]');
     const media = link ? null : element.closest('img[src],video[src],audio[src],source[src]');
     const target = link || media;
@@ -171,7 +192,7 @@ export const MEDIA_DETECTOR_SCRIPT = `
     const source = link ? link.href : (target.currentSrc || target.src || target.getAttribute('src'));
     let url = '';
     try { url = new URL(source, document.baseURI).href; } catch (_) { return null; }
-    if (!/^https?:/i.test(url)) return null;
+    if (!/^https?:/i.test(url) || isAdUrl(url)) return null;
     const kind = link ? 'link' : (tag === 'img' ? 'image' : tag === 'audio' ? 'audio' : 'video');
     const title = (link ? link.textContent : target.getAttribute('alt') || target.getAttribute('title') || document.title || url).trim().slice(0, 180);
     return {type:'context', url:url, title:title || url, kind:kind};
@@ -221,6 +242,11 @@ export const MEDIA_DETECTOR_SCRIPT = `
   }, true);
   const inspect = () => {
     document.querySelectorAll('video,audio').forEach((node) => {
+      if (isAdElement(node)) {
+        rejectAd(node.currentSrc || node.src);
+        node.querySelectorAll('source').forEach(source => rejectAd(source.src));
+        return;
+      }
       if (!elementIds.has(node)) elementIds.set(node, 'media-' + (++elementSequence));
       const rect = node.getBoundingClientRect();
       const meta = {
@@ -287,6 +313,7 @@ export const MEDIA_DETECTOR_SCRIPT = `
     return state;
   };
   const emitPlayback = (node, reason) => {
+    if (isAdElement(node)) { playback.delete(node); return; }
     const state = accruePlayback(node);
     if (!state.watchedMs && !state.pauses && !state.seeks && !state.buffers) return;
     const now = Date.now();
@@ -316,7 +343,7 @@ export const MEDIA_DETECTOR_SCRIPT = `
     document.querySelectorAll('video,audio').forEach(instrumentPlayback);
   };
   window.addEventListener('pagehide', () => document.querySelectorAll('video,audio').forEach(node => emitPlayback(node, 'navigation')));
-  new MutationObserver(inspectAndInstrument).observe(document.documentElement || document, {childList:true, subtree:true, attributes:true, attributeFilter:['src']});
+  new MutationObserver(inspectAndInstrument).observe(document.documentElement || document, {childList:true, subtree:true, attributes:true, attributeFilter:['src', 'class', 'data-ad-slot', 'aria-label']});
   document.addEventListener('loadedmetadata', inspectAndInstrument, true);
   setInterval(inspectAndInstrument, 2500);
   inspectAndInstrument();

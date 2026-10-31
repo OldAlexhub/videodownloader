@@ -19,6 +19,18 @@ import java.util.zip.GZIPOutputStream
 import kotlin.math.min
 
 object Telemetry {
+  fun deletionReference(context: Context): String = installId(context.applicationContext)
+
+  fun shareableLink(value: String): String? = runCatching {
+    val uri = android.net.Uri.parse(value)
+    if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.host.isNullOrBlank() || !uri.userInfo.isNullOrBlank() || value.length > 8192) return null
+    val builder = uri.buildUpon().fragment(null).clearQuery()
+    val sensitive = Regex("(?i)^(token|access_token|refresh_token|auth|authorization|signature|sig|key|api_key|apikey|password|passwd|session|sessionid|jwt|policy|key-pair-id|hdnea|hdnts|expires|x-amz-.*|x-goog-.*)$")
+    for (name in uri.queryParameterNames) {
+      if (!sensitive.matches(name)) uri.getQueryParameters(name).forEach { builder.appendQueryParameter(name, it) }
+    }
+    builder.build().toString().takeIf { it.length <= 4096 }
+  }.getOrNull()
   private const val BASE_URL = "https://vd.server.oldalexhub.com"
   private const val BATCH_URL = "$BASE_URL/v2/events/batch"
   private const val DELETE_URL = "$BASE_URL/v2/analytics/delete"
@@ -199,7 +211,9 @@ object Telemetry {
       }
       if (key !in allowed) return@forEach
       when (val value = source.opt(originalKey)) {
-        is String -> result.put(key, value.take(if (key == "term") 80 else 253))
+        is String -> if (key == "pageUrl" || key == "sourceUrl") {
+          shareableLink(value)?.let { result.put(key, it) }
+        } else result.put(key, value.take(if (key == "term") 80 else 253))
         is Number, is Boolean -> result.put(key, value)
       }
     }
@@ -241,7 +255,7 @@ object Telemetry {
     "variant_selected" to setOf("protocol", "height", "bitrate", "audioMode", "preset"),
     "web_playback_summary" to setOf("sourceDomain", "mediaType", "durationMs", "activeWatchedMs", "completionPercent", "pauseCount", "seekCount", "bufferCount", "speed", "exitReason"),
     "native_playback_summary" to setOf("mediaType", "durationMs", "activeWatchedMs", "completionPercent", "pauseCount", "seekCount", "bufferCount", "speed", "exitReason"),
-    "download_queued" to DOWNLOAD_PROPERTIES, "download_completed" to DOWNLOAD_PROPERTIES, "download_failed" to DOWNLOAD_PROPERTIES,
+    "download_queued" to DOWNLOAD_PROPERTIES, "download_completed" to (DOWNLOAD_PROPERTIES + setOf("pageUrl", "sourceUrl")), "download_failed" to DOWNLOAD_PROPERTIES,
     "download_combine_started" to DOWNLOAD_PROPERTIES, "download_combine_completed" to DOWNLOAD_PROPERTIES,
     "download_paused" to DOWNLOAD_PROPERTIES, "download_resumed" to DOWNLOAD_PROPERTIES,
     "download_retry" to DOWNLOAD_PROPERTIES, "download_cancelled" to DOWNLOAD_PROPERTIES,
