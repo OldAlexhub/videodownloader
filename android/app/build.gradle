@@ -88,7 +88,7 @@ android {
         applicationId "com.oldalexhub.videodownloader"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 8
+        versionCode 9
         versionName "2.0.0"
         manifestPlaceholders = [
             adMobAppId: "ca-app-pub-7831002909037560~8100766073",

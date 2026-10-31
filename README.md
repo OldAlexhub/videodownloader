@@ -21,6 +21,7 @@ Only download media you own, have permission to download, or that the content pr
 - Bounded, failure-tolerant analytics delivery to `https://vd.server.oldalexhub.com/v2/events/batch`
 - Open the original page for saved downloads from Downloads and Library
 - Device WebView identity with an installed-engine version and update shortcut in Settings
+- HTTP error responses remain visible, with a compact recovery notice instead of covering verification pages. Per-site compatibility mode temporarily pauses ad-blocking and detector scripts without changing private-browsing settings; Restore detection reloads with normal features. Open in browser provides an external-browser fallback. Compatibility choices last for the current app session.
 
 No media file is proxied through an Old Alex Hub server. Download bytes flow directly from the source to the Android device.
 
