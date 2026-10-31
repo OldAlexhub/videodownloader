@@ -4,6 +4,7 @@ import {
   Alert,
   BackHandler,
   Image,
+  Linking,
   Modal,
   Pressable,
   Share,
@@ -93,6 +94,12 @@ export function BrowserScreen() {
   const [libraryVisible, setLibraryVisible] = useState<'history' | 'bookmarks' | null>(null);
   const [contextTarget, setContextTarget] = useState<ContextTarget>();
   const [error, setError] = useState<string>();
+  const [httpStatus, setHttpStatus] = useState<number>();
+  const [compatibilitySites, setCompatibilitySites] = useState<Set<string>>(() => new Set());
+  const compatibilityReload = useRef(false);
+  let siteOrigin = '';
+  try { siteOrigin = new URL(active.url).origin; } catch { /* New tab. */ }
+  const compatibilityMode = compatibilitySites.has(siteOrigin);
   const documentSequence = useRef(0);
   const initialDocumentId = 'initial:0';
   const [documentId, setDocumentId] = useState(initialDocumentId);
@@ -110,6 +117,8 @@ export function BrowserScreen() {
     : `${detectorBootstrap}\n${MEDIA_DETECTOR_SCRIPT}`;
 
   const startDocument = useCallback((tabId = activeId) => {
+    setHttpStatus(undefined);
+    setError(undefined);
     documentSequence.current += 1;
     const nextDocumentId = `${tabId}:${documentSequence.current}`;
     documentIdRef.current = nextDocumentId;
@@ -122,6 +131,28 @@ export function BrowserScreen() {
     completedScanDocument.current = '';
     clearDetectedMedia();
   }, [activeId, clearDetectedMedia]);
+
+  useEffect(() => {
+    if (!compatibilityReload.current) return;
+    compatibilityReload.current = false;
+    startDocument();
+    webView.current?.reload();
+  }, [compatibilitySites, startDocument]);
+
+  const toggleCompatibility = () => {
+    if (!siteOrigin) return;
+    compatibilityReload.current = true;
+    setCompatibilitySites(current => {
+      const next = new Set(current);
+      if (next.has(siteOrigin)) next.delete(siteOrigin);
+      else next.add(siteOrigin);
+      return next;
+    });
+  };
+  const openExternalBrowser = () => {
+    if (!/^https?:\/\//i.test(active.url)) return;
+    Linking.openURL(active.url).catch(() => Alert.alert('Browser unavailable', 'Install or enable a web browser, then try again.'));
+  };
 
   useEffect(() => {
     if (!browserTarget) {
@@ -156,6 +187,8 @@ export function BrowserScreen() {
     setLibraryVisible(null);
     setContextTarget(undefined);
     setError(undefined);
+    setHttpStatus(undefined);
+    setCompatibilitySites(new Set());
     lastReportedVisit.current = undefined;
     clearDetectedMedia();
   }, [browserResetKey, clearDetectedMedia]);
@@ -218,6 +251,7 @@ export function BrowserScreen() {
   };
 
   const handleMessage = (event: WebViewMessageEvent) => {
+    if (compatibilityMode) return;
     try {
       const payload = JSON.parse(event.nativeEvent.data);
       if (payload.type === 'mediaRejected' && typeof payload.url === 'string') {
@@ -546,6 +580,20 @@ export function BrowserScreen() {
         <Pressable onPress={() => webView.current?.reload()} style={styles.navButton}><RefreshCw color={colors.ink} size={19} /></Pressable>
       </View>
       {loading ? <View style={styles.progressTrack}><View style={[styles.progressFill, {width: `${Math.max(4, progress * 100)}%`}]} /></View> : null}
+      {httpStatus || compatibilityMode ? (
+        <View testID="browser-recovery-notice" style={styles.recoveryNotice}>
+          <View style={styles.recoveryHeading}>
+            <Text style={styles.recoveryTitle}>{httpStatus ? `Website response: ${httpStatus}` : 'Site compatibility mode'}</Text>
+            {httpStatus ? <Pressable accessibilityLabel="Dismiss website response notice" onPress={() => setHttpStatus(undefined)}><X color={colors.muted} size={18} /></Pressable> : null}
+          </View>
+          <Text style={styles.recoveryBody}>{compatibilityMode ? 'Page modifications and automatic media detection are paused for this site. Restore them after the page opens.' : 'The website is still visible below. Complete any verification it shows, or try compatibility mode if it stays stuck.'}</Text>
+          <View style={styles.recoveryActions}>
+            <Pressable accessibilityRole="button" onPress={() => webView.current?.reload()}><Text style={styles.recoveryAction}>Retry</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={toggleCompatibility}><Text style={styles.recoveryAction}>{compatibilityMode ? 'Restore detection' : 'Try compatibility mode'}</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={openExternalBrowser}><Text style={styles.recoveryAction}>Open in browser</Text></Pressable>
+          </View>
+        </View>
+      ) : null}
       <AndroidWebView
           key={active.id}
           ref={webView}
@@ -560,8 +608,8 @@ export function BrowserScreen() {
           setSupportMultipleWindows
           allowsFullscreenVideo
           mediaPlaybackRequiresUserAction
-          injectedJavaScriptBeforeContentLoaded={settings.blockWebsiteAds ? WEBSITE_AD_BLOCKER_SCRIPT : undefined}
-          injectedJavaScript={injectedScript}
+          injectedJavaScriptBeforeContentLoaded={!compatibilityMode && settings.blockWebsiteAds ? WEBSITE_AD_BLOCKER_SCRIPT : undefined}
+          injectedJavaScript={compatibilityMode ? undefined : injectedScript}
           onMessage={handleMessage}
           onNavigationStateChange={updateNavigation}
           onLoadStart={(event: {nativeEvent: {url?: string}}) => {
@@ -572,16 +620,20 @@ export function BrowserScreen() {
             }
             setLoading(true);
             setError(undefined);
+            setHttpStatus(undefined);
           }}
           onLoadProgress={(event: {nativeEvent: {progress: number}}) => setProgress(event.nativeEvent.progress)}
           onLoadEnd={() => setLoading(false)}
           onError={(event: {nativeEvent: {description?: string}}) => {setLoading(false); setError(event.nativeEvent.description || 'Check your connection and try again.');}}
-          onHttpError={(event: {nativeEvent: {statusCode: number}}) => {if (event.nativeEvent.statusCode >= 400) setError(`The website returned error ${event.nativeEvent.statusCode}.`);}}
+          // HTTP errors can contain a usable page or an interactive browser check.
+          // Keep that response rendered; only transport failures get an overlay.
+          onHttpError={(event: {nativeEvent: {statusCode: number}}) => {if (event.nativeEvent.statusCode >= 400) setHttpStatus(event.nativeEvent.statusCode);}}
           onOpenWindow={(event: {nativeEvent: {targetUrl?: string}}) => {
             const targetUrl = event.nativeEvent.targetUrl || '';
             if (/^https?:\/\//i.test(targetUrl)) openNewTab(targetUrl, targetUrl);
           }}
           onShouldStartLoadWithRequest={(request: {url: string; isTopFrame?: boolean}) => {
+            if (compatibilityMode) return true;
             const candidate = inferMediaFromUrl(request.url, active.url, pageTitle);
             if (candidate && !rejectedMedia.current.has(candidate.sourceUrl)) {
               const candidateDocumentId = documentIdRef.current;
@@ -622,7 +674,7 @@ export function BrowserScreen() {
           }}
         />
       {error ? (
-        <View style={styles.errorState}><Globe2 color={colors.muted} size={38} /><Text style={styles.errorTitle}>Page could not be loaded</Text><Text style={styles.errorBody}>{error}</Text><Pressable onPress={() => {setError(undefined); webView.current?.reload();}} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View>
+        <View testID="browser-network-error" style={styles.errorState}><Globe2 color={colors.muted} size={38} /><Text style={styles.errorTitle}>Page could not be loaded</Text><Text style={styles.errorBody}>{error}</Text><Pressable onPress={() => {setError(undefined); webView.current?.reload();}} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable><Pressable onPress={openExternalBrowser} style={styles.externalRecovery}><Text style={styles.recoveryAction}>Open in browser</Text></Pressable></View>
       ) : null}
       {pageAssets.length > 0 || scanningCount > 0 ? (
         <Pressable onPress={openDetectedMedia} style={styles.mediaFound}>
@@ -809,6 +861,13 @@ const styles = StyleSheet.create({
   progressFill: {height: 2, backgroundColor: colors.blue600},
   webView: {flex: 1, backgroundColor: colors.white},
   errorState: {position: 'absolute', top: 54, right: 0, bottom: 54, left: 0, zIndex: 3, alignItems: 'center', justifyContent: 'center', padding: 32, backgroundColor: colors.surface},
+  recoveryNotice: {paddingHorizontal: 14, paddingVertical: 10, backgroundColor: '#EEF4FF', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line},
+  recoveryHeading: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
+  recoveryTitle: {fontSize: 13, fontWeight: '700', color: colors.ink},
+  recoveryBody: {fontSize: 12, lineHeight: 17, color: colors.muted, marginTop: 4},
+  recoveryActions: {flexDirection: 'row', flexWrap: 'wrap', gap: 16, marginTop: 8},
+  recoveryAction: {fontSize: 12, fontWeight: '700', color: colors.blue700, paddingVertical: 5},
+  externalRecovery: {marginTop: 12},
   errorTitle: {fontSize: 19, fontWeight: '800', color: colors.ink, marginTop: spacing.lg},
   errorBody: {fontSize: 14, lineHeight: 20, textAlign: 'center', color: colors.muted, marginTop: spacing.sm},
   retry: {marginTop: spacing.lg, backgroundColor: colors.blue700, borderRadius: radius.md, paddingHorizontal: 18, paddingVertical: 11},
