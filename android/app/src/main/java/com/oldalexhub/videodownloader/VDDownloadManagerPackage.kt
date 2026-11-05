@@ -7,7 +7,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class VDDownloadManagerPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-    listOf(VDDownloadManagerModule(reactContext))
+    listOf(VDDownloadManagerModule(reactContext), BrowserSessionModule(reactContext))
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()
 }

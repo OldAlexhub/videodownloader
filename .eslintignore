@@ -1,0 +1,3 @@
+# HLS MPEG transport streams are binary media fixtures, not TypeScript.
+qa/media/*.ts
+android/**/build/**

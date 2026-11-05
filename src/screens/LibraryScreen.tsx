@@ -1,3 +1,4 @@
+import {NativeSponsoredCard} from '../ads/NativeSponsoredCard';
 import React, {useMemo, useState} from 'react';
 import {Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View} from 'react-native';
 import {ExternalLink, Clock3, FileAudio, FileImage, FileVideo, Grid2X2, List, MoreVertical, Search, Share2, Play, Edit3, FolderInput, Trash2, Info} from 'lucide-react-native';
@@ -16,6 +17,10 @@ type SortKey = 'newest' | 'oldest' | 'name' | 'size';
 
 export function LibraryScreen() {
   const {downloads, refreshDownloads, openBrowser} = useApp();
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchIds, setBatchIds] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const toggleBatch = (id: string) => setBatchIds(current => {const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next;});
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('newest');
@@ -30,7 +35,7 @@ export function LibraryScreen() {
       if (sort === 'oldest') return (a.completedAt || 0) - (b.completedAt || 0);
       if (sort === 'name') return a.finalFilename.localeCompare(b.finalFilename);
       if (sort === 'size') return (b.actualBytes || 0) - (a.actualBytes || 0);
-      return (b.completedAt || 0) - (a.completedAt || 0);
+        return (b.completedAt || 0) - (a.completedAt || 0);
     }), [downloads, filter, query, sort]);
   const continueWatching = useMemo(() => downloads
     .filter(item => item.status === 'completed' && (item.mediaType === 'video' || item.mediaType === 'audio'))
@@ -54,6 +59,23 @@ export function LibraryScreen() {
     }
   };
 
+  const applyBatch = async (action: 'move' | 'records' | 'files') => {
+    if (batchBusy || !batchIds.size) return;
+    setBatchBusy(true);
+    try {
+      const destination = action === 'move' ? await downloadManager.chooseDestination() : undefined;
+      const results = await Promise.allSettled([...batchIds].map(id => destination ? downloadManager.move(id, destination.uri) : downloadManager.remove(id, action === 'files')));
+      await refreshDownloads();
+      const failures = results.filter(result => result.status === 'rejected').length;
+      setBatchIds(new Set()); setBatchMode(false);
+      if (failures) Alert.alert('Some items could not be changed', `${failures} items remain unchanged. Check folder access and try again.`);
+    } catch (error) {if (!/cancel/i.test(String(error))) Alert.alert('Action unavailable', 'Your selection has been kept. Check folder access and try again.');}
+    finally {setBatchBusy(false);}
+  };
+  const confirmBatch = (files: boolean) => Alert.alert(files ? 'Delete selected files?' : 'Remove selected records?', files ? 'These media files will be permanently deleted.' : 'Files remain in their folders. They will no longer appear in this library.', [
+    {text:'Cancel', style:'cancel'}, {text:files ? 'Delete files' : 'Remove records', style:'destructive', onPress: () => applyBatch(files ? 'files' : 'records')},
+  ]);
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
@@ -64,7 +86,16 @@ export function LibraryScreen() {
           <Pressable onPress={() => setSort(current => current === 'newest' ? 'oldest' : current === 'oldest' ? 'name' : current === 'name' ? 'size' : 'newest')} style={styles.sort}><Clock3 color={colors.blue700} size={15} /><Text style={styles.sortText}>{sort}</Text></Pressable>
         </SafeScrollView>
       </View>
-      {continueWatching.length ? (
+      <View style={styles.batchSelector}>
+        <Pressable accessibilityRole="button" style={styles.sort} onPress={() => {setBatchMode(value => !value); setBatchIds(new Set());}}><Text style={styles.sortText}>{batchMode ? 'Done selecting' : 'Select items'}</Text></Pressable>
+        {batchMode ? <><Text style={styles.selectedCount}>{batchIds.size} selected</Text><Pressable style={styles.sort} onPress={() => setBatchIds(new Set(completed.map(item => item.id)))}><Text style={styles.sortText}>Select all shown</Text></Pressable></> : null}
+      </View>
+      {batchMode && batchIds.size ? <View style={styles.batchActions}>
+        <Pressable disabled={batchBusy} style={styles.sort} onPress={() => applyBatch('move')}><Text style={styles.sortText}>Move</Text></Pressable>
+        <Pressable disabled={batchBusy} style={styles.sort} onPress={() => confirmBatch(false)}><Text style={styles.sortText}>Remove records</Text></Pressable>
+        <Pressable disabled={batchBusy} style={styles.sort} onPress={() => confirmBatch(true)}><Text style={[styles.sortText,{color:colors.danger}]}>Delete files</Text></Pressable>
+      </View> : null}
+      {continueWatching.length && !batchMode ? (
         <View style={styles.continueSection}>
           <Text style={styles.continueTitle}>Continue Watching</Text>
           <ScrollView horizontal contentContainerStyle={styles.continueList} showsHorizontalScrollIndicator={false}>
@@ -79,18 +110,19 @@ export function LibraryScreen() {
       ) : null}
       {completed.length === 0 ? <EmptyState title={query ? 'No matching media' : 'No downloaded media yet'} message={query ? 'Try another search or filter.' : 'Completed videos, audio, and images will be organized here.'} action={query ? undefined : 'Browse media'} onAction={query ? undefined : () => openBrowser()} /> : (
         <SafeScrollView contentContainerStyle={[styles.content, grid && styles.grid]}>
-          {completed.map(item => <LibraryCard key={item.id} item={item} grid={grid} onOpen={() => act(() => downloadManager.open(item.id))} onMore={() => setSelected(item)} />)}
+          {completed.map(item => <LibraryCard key={item.id} item={item} grid={grid} batchMode={batchMode} checked={batchIds.has(item.id)} onOpen={() => batchMode ? toggleBatch(item.id) : act(() => downloadManager.open(item.id))} onMore={() => setSelected(item)} />)}
         </SafeScrollView>
       )}
+      {!selected && !rename && !batchMode ? <NativeSponsoredCard placement="library" /> : null}
       <LibraryActions item={selected} onSource={() => { const url = originalDownloadLink(selected); if (url) { setSelected(undefined); openBrowser(url); } else Alert.alert('Link unavailable', 'This older download has no saved web link.'); }} onClose={() => setSelected(undefined)} onOpen={() => selected && act(() => downloadManager.open(selected.id))} onShare={() => selected && act(() => downloadManager.share(selected.id))} onRename={() => {setRename(selected); setSelected(undefined);}} onMove={move} onDelete={() => selected && Alert.alert('Delete media?', 'This permanently removes the downloaded file.', [{text: 'Cancel', style: 'cancel'}, {text: 'Delete', style: 'destructive', onPress: () => {act(() => downloadManager.remove(selected.id, true)); setSelected(undefined);}}])} />
       <RenameDialog visible={Boolean(rename)} initialValue={rename?.finalFilename || ''} onCancel={() => setRename(undefined)} onSave={async value => {if (rename) await act(() => downloadManager.rename(rename.id, value)); setRename(undefined);}} />
     </View>
   );
 }
 
-function LibraryCard({item, grid, onOpen, onMore}: {item: DownloadItem; grid: boolean; onOpen: () => void; onMore: () => void}) {
+function LibraryCard({item, grid, onOpen, onMore, batchMode, checked}: {item: DownloadItem; grid: boolean; batchMode: boolean; checked: boolean; onOpen: () => void; onMore: () => void}) {
   const Icon = item.mediaType === 'video' ? FileVideo : item.mediaType === 'audio' ? FileAudio : FileImage;
-  return <Pressable onPress={onOpen} style={[styles.card, grid ? styles.cardGrid : styles.cardList]}><View style={[styles.preview, !grid && styles.previewList]}><Icon color={colors.blue600} size={grid ? 34 : 26} />{item.mediaType !== 'image' ? <View style={styles.play}><Play color={colors.white} fill={colors.white} size={12} /></View> : null}</View><View style={styles.cardCopy}><Text numberOfLines={2} style={styles.cardTitle}>{item.title || item.finalFilename}</Text><Text numberOfLines={1} style={styles.cardMeta}>{item.qualityLabel || item.extension.toUpperCase()} · {formatBytes(item.actualBytes)}</Text><Text style={styles.cardDate}>{formatDate(item.completedAt)}</Text></View><Pressable accessibilityLabel="Media actions" onPress={onMore} style={styles.more}><MoreVertical color={colors.muted} size={19} /></Pressable></Pressable>;
+  return <Pressable accessibilityRole={batchMode ? "checkbox" : "button"} accessibilityState={batchMode ? {checked} : undefined} accessibilityLabel={item.finalFilename || item.title} onPress={onOpen} style={[styles.card, checked && styles.selectedCard, grid ? styles.cardGrid : styles.cardList]}><View style={[styles.preview, !grid && styles.previewList]}><Icon color={colors.blue600} size={grid ? 34 : 26} />{item.mediaType !== 'image' ? <View style={styles.play}><Play color={colors.white} fill={colors.white} size={12} /></View> : null}</View><View style={styles.cardCopy}><Text numberOfLines={2} style={styles.cardTitle}>{batchMode && checked ? 'Selected: ' : ''}{item.title || item.finalFilename}</Text><Text numberOfLines={1} style={styles.cardMeta}>{item.qualityLabel || item.extension.toUpperCase()} · {formatBytes(item.actualBytes)}</Text><Text style={styles.cardDate}>{formatDate(item.completedAt)}</Text></View><Pressable accessibilityLabel="Media actions" onPress={onMore} style={styles.more}><MoreVertical color={colors.muted} size={19} /></Pressable></Pressable>;
 }
 
 function LibraryActions({item, onSource, onClose, onOpen, onShare, onRename, onMove, onDelete}: {item?: DownloadItem; onSource: () => void; onClose: () => void; onOpen: () => void; onShare: () => void; onRename: () => void; onMove: () => void; onDelete: () => void}) {
@@ -99,6 +131,10 @@ function LibraryActions({item, onSource, onClose, onOpen, onShare, onRename, onM
 }
 
 const styles = StyleSheet.create({
+  batchSelector: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16},
+  batchActions: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, padding: 16},
+  selectedCount: {alignSelf: 'center'},
+  selectedCard: {borderColor: colors.blue700, borderWidth: 2},
   screen: {flex: 1, backgroundColor: colors.surface},
   header: {backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.line, paddingHorizontal: spacing.lg, paddingTop: spacing.lg},
   titleRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'},

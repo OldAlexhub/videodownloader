@@ -8,7 +8,7 @@ Only download media you own, have permission to download, or that the content pr
 
 ## Architecture
 
-- React Native 0.87 with TypeScript for the application UI
+- React Native 0.88 with TypeScript for the application UI
 - Kotlin native module for persistent downloads, SQLite records, storage, sharing, rename, move, and playback intents
 - WorkManager long-running workers with foreground notifications for user-started downloads
 - Android MediaStore for default scoped storage on Android 10 and newer
@@ -21,7 +21,7 @@ Only download media you own, have permission to download, or that the content pr
 - Bounded, failure-tolerant analytics delivery to `https://vd.server.oldalexhub.com/v2/events/batch`
 - Open the original page for saved downloads from Downloads and Library
 - Device WebView identity with an installed-engine version and update shortcut in Settings
-- HTTP error responses remain visible, with a compact recovery notice instead of covering verification pages. Per-site compatibility mode temporarily pauses ad-blocking and detector scripts without changing private-browsing settings; Restore detection reloads with normal features. Open in browser provides an external-browser fallback. Compatibility choices last for the current app session.
+- HTTP error responses remain visible. Per-site compatibility mode pauses page filtering while keeping passive detection. Preferences persist for normal sessions and can be reset in Settings. Open in browser provides an external fallback.
 
 No media file is proxied through an Old Alex Hub server. Download bytes flow directly from the source to the Android device.
 
@@ -81,7 +81,7 @@ Direct HTTP downloads support:
 - Collision-free filenames
 - SHA-256 hashing after completion
 
-Unencrypted HLS media playlists are downloaded segment by segment and resume at a completed segment boundary. Master playlists expose real resolution choices. Live playlists and encrypted HLS are rejected clearly. DASH manifests with a direct progressive representation are supported. DRM and DASH layouts that cannot be packaged safely are rejected instead of producing a corrupt file.
+Compatible unencrypted on-demand HLS/DASH use Media3 inspection and export with explicit track selection. Adaptive cache can preserve fetched bytes across interrupted exports. Finished output is checked for readable samples, seeking, duration and expected audio. Live, protected and multi-period streams are unsupported.
 
 ## Browser detection
 
@@ -126,26 +126,11 @@ Debug builds use Google's official test app ID and test ad units. Release builds
 
 Banners collapse after an error and reserve space again when retrying. Native ads are labeled Sponsored. Failed ad loads retry with a 30-second to five-minute backoff while the app is active. Interstitials are preloaded and can appear only at a natural transition after at least two completed downloads, three meaningful transitions, eight minutes between impressions, and no more than four times in one session. If an ad is unavailable, navigation continues immediately. Dashboard load rate (loads/requests) and show rate (impressions/loads) are app telemetry estimates; AdMob reporting remains authoritative.
 
-## Analytics and backend
+## Data & Privacy and backend
 
-The analytics base URL is `https://vd.server.oldalexhub.com`. The app posts batches to `/v2/events/batch`. A bounded local queue keeps at most 500 events. Failures never block browser, download, library, player, or ad flows. Deploy the updated sibling server before releasing this app: its completed-download schema accepts the new source links.
+Operational measurements support reliability and advertising performance. Broader search, domain, playback and sanitized completed-download-link insights require affirmative consent. Withdrawal is in Settings. Migration preserves refusals and never interprets former default-on settings as consent. Private-session details, media bytes, credentials, cookies and page content are excluded from analytics.
 
-The production backend implementation is in the sibling [`server`](../server) repository. It includes the ingestion API, PostgreSQL event storage and retention indexes, local IP geolocation, authenticated reporting APIs, an admin dashboard, automated tests, Docker deployment files, and an Nginx configuration for `vd.server.oldalexhub.com`.
-
-Events can contain:
-
-- Random installation ID for approximate unique-user counts. The server stores only its keyed HMAC hash.
-- Event time, app version, Android API level, locale, and time zone
-- Download metadata allowed by the event schema (legacy events may include title and filename)
-- Source domain and, for completed non-private downloads, original-page and media links with fragments and common credential/signature parameters removed
-- Media type, actual source quality, bytes, result, duration, and failure code
-- Ad format and placement impression events
-
-Share app data and Search & website insights are on by default and can each be disabled in Settings; existing opt-outs are preserved. When both are enabled, submitted browser search terms and visited website domains are sent for aggregate top-term and top-site reporting. Private sessions are excluded from these insights. Browser visit events contain domains rather than full URLs; completed non-private downloads separately include sanitized source links. Individual search and site values are hidden in the recent-event dashboard. Disabling Search & website insights removes queued search and site events.
-
-The backend may derive approximate city and country from the request IP and then discards the IP without storing it. The app does not request Android location permission. Media bytes, cookies, authorization headers, local browsing history, and page content are not included in analytics. Users can disable Share app data in Settings, which clears the pending analytics queue. Request data deletion opens an email draft to info@oldalexhub.com with the installation reference; Delete server analytics provides immediate in-app deletion.
-
-Expected event endpoint response: any HTTP 2xx status acknowledges the event. Other responses leave the event queued for a later app session.
+Verified seven-day request codes support user-sent access/deletion drafts to info@oldalexhub.com. In-app deletion clears pending events, deletes current-installation server data and rotates the identifier without changing consent. Deploy the compatible backend before releasing this client. See [privacy policy](PRIVACYPOLICY.md) and [release gates](qa/RELEASE-GATES.md).
 
 ## Privacy architecture
 
@@ -199,10 +184,14 @@ releases/builds/VideoDownloader-release.aab
 2. Review `store_assets/data-safety-notes.md` against the deployed server and AdMob configuration.
 3. Complete AdMob app readiness and UMP messages.
 4. Run production QA on gesture navigation and 3-button navigation.
-5. Test direct MP4, audio, unencrypted HLS, supported progressive DASH, failures, pause, resume, process recreation, sharing, moving, renaming, and deletion.
+5. Test direct MP4, audio, unencrypted HLS, supported on-demand DASH, failures, pause, resume, process recreation, sharing, moving, renaming, and deletion.
 6. Verify test ad units in debug and production IDs only in the signed release.
 7. Upload the signed AAB from `releases/builds` to an internal testing track first.
 
 ## Copyright compliance
 
 The app is a general media utility. It must not be marketed as a way to download paid, protected, or unauthorized content. It does not implement DRM circumvention, Widevine circumvention, paywall bypass, or a dedicated downloader for protected platforms.
+
+## Quality-remake validation
+
+See [fixtures and release gates](qa/RELEASE-GATES.md). Source changes and emulator tests do not imply a completed closed beta, Play submission, production deployment or measured profitability.

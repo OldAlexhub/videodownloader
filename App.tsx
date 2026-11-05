@@ -1,6 +1,5 @@
 import React, {useEffect, useState} from 'react';
 import {AppState, Linking, Modal, Pressable, StatusBar, StyleSheet, Text, View} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import mobileAds, {AdsConsent} from 'react-native-google-mobile-ads';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {AppShell} from './src/components/AppShell';
@@ -44,17 +43,19 @@ function CurrentScreen() {
 }
 
 function AnalyticsDisclosure() {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    AsyncStorage.getItem('v3-link-sharing-disclosure').then(value => setVisible(value !== 'seen')).catch(() => undefined);
-  }, []);
-  if (!visible) return null;
-  return (
-    <View accessibilityRole="summary" style={styles.disclosure}>
-      <Text style={styles.disclosureText}>Data sharing is on by default. When enabled, it includes app activity and completed non-private download links. Change sharing or request deletion in Settings.</Text>
-      <Pressable onPress={() => {setVisible(false); AsyncStorage.setItem('v3-link-sharing-disclosure', 'seen').catch(() => undefined);}} style={styles.disclosureButton}><Text style={styles.disclosureButtonText}>Got it</Text></Pressable>
+  const {settings, updateSettings} = useApp();
+  if (settings.behavioralConsent !== 'pending') return null;
+  const choose = (allowed: boolean) => updateSettings({behavioralConsent: allowed ? 'granted' : 'denied', usageInsightsEnabled: allowed, consentUpdatedAt: Date.now()});
+  return <Modal transparent visible animationType="fade" onRequestClose={() => choose(false)}><View style={styles.consentBackdrop}><SafeScrollView contentContainerStyle={styles.consentScroll}><View accessibilityRole="summary" style={styles.disclosure}>
+    <View style={styles.disclosureCopy}>
+      <Text style={styles.disclosureButtonText}>Help improve supported websites?</Text>
+      <Text style={styles.disclosureText}>Old Alex Hub receives operational measurements. With your permission, we also collect searches, visited domains, playback activity and sanitized completed-download links for product insights, retained up to 730 days. Private browsing is excluded. Change your choice or request access/deletion in Settings. All features remain free.</Text>
+      <View style={styles.disclosureActions}>
+        <Pressable accessibilityRole="button" onPress={() => choose(false)} style={styles.disclosureButton}><Text style={styles.disclosureButtonText}>Not now</Text></Pressable>
+        <Pressable accessibilityRole="button" onPress={() => choose(true)} style={styles.disclosureButton}><Text style={styles.disclosureButtonText}>Allow insights</Text></Pressable>
+      </View>
     </View>
-  );
+  </View></SafeScrollView></View></Modal>;
 }
 
 function ForceUpdateModal({visible}: {visible: boolean}) {
@@ -108,11 +109,15 @@ function ForceUpdateModal({visible}: {visible: boolean}) {
 }
 
 const styles = StyleSheet.create({
+  disclosureCopy: {flex: 1},
+  disclosureActions: {flexDirection: 'row', flexWrap: 'wrap'},
   browserContainer: {flex: 1},
   hidden: {display: 'none'},
-  disclosure: {position: 'absolute', zIndex: 20, top: 8, left: 12, right: 12, minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 14, paddingRight: 6, paddingVertical: 7, borderRadius: 14, backgroundColor: '#08295D', elevation: 8},
-  disclosureText: {flex: 1, color: '#EAF3FF', fontSize: 11, lineHeight: 16},
-  disclosureButton: {minWidth: 56, minHeight: 48, alignItems: 'center', justifyContent: 'center'},
+  consentBackdrop: {flex:1, backgroundColor:'rgba(8,25,50,0.55)', justifyContent:'center'},
+  consentScroll: {flexGrow:1, justifyContent:'center', padding:24},
+  disclosure: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 14, paddingRight: 6, paddingVertical: 7, borderRadius: 14, backgroundColor: '#08295D', elevation: 8},
+  disclosureText: {flex: 1, color: '#EAF3FF', fontSize: 14, lineHeight: 22},
+  disclosureButton: {minWidth: 96, paddingHorizontal:12, minHeight: 48, alignItems: 'center', justifyContent: 'center'},
   disclosureButtonText: {color: '#FFFFFF', fontSize: 12, fontWeight: '900'},
   updateScreen: {backgroundColor: '#F2F7FF'},
   updateScroll: {flexGrow: 1, justifyContent: 'center', padding: 24},

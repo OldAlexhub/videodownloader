@@ -7,7 +7,7 @@ import {downloadManager} from '../native/DownloadManager';
 import {useAdsReady} from './AdConsentContext';
 const requestOptions = {requestNonPersonalizedAdsOnly: false};
 
-export function SafeAdContainer() {
+export function SafeAdContainer({placement = 'downloads'}: {placement?: string}) {
   const adsReady = useAdsReady();
   const [visible, setVisible] = useState(true);
   const banner = useRef<BannerAd>(null);
@@ -22,7 +22,7 @@ export function SafeAdContainer() {
   };
   useEffect(() => {
     return () => clearTimeout(retryTimer.current);
-  }, [adsReady]);
+  }, [adsReady, placement]);
   if (!adsReady) return null;
   return (
     <View style={visible ? styles.loaded : styles.collapsed} pointerEvents={visible ? 'auto' : 'none'}>
@@ -35,17 +35,17 @@ export function SafeAdContainer() {
           clearTimeout(retryTimer.current); failures.current = 0; setVisible(true);
           // The SDK refreshes banners internally. Count each observed request outcome,
           // including automatic refreshes, instead of counting only the first mount.
-          downloadManager.trackEvent('ad_request', {format: 'banner', placement: 'bottom_bar'}).catch(() => undefined);
-          downloadManager.trackEvent('ad_load', {format: 'banner', placement: 'bottom_bar'}).catch(() => undefined);
+          downloadManager.trackEvent('ad_request', {format: 'banner', placement}).catch(() => undefined);
+          downloadManager.trackEvent('ad_load', {format: 'banner', placement}).catch(() => undefined);
         }}
-        onAdImpression={() => downloadManager.trackEvent('ad_impression', {format: 'banner', placement: 'bottom_bar'}).catch(() => undefined)}
+        onAdImpression={() => downloadManager.trackEvent('ad_impression', {format: 'banner', placement}).catch(() => undefined)}
         onAdFailedToLoad={error => {
           setVisible(false);
-          downloadManager.trackEvent('ad_request', {format: 'banner', placement: 'bottom_bar'}).catch(() => undefined);
-          downloadManager.trackEvent('ad_failure', {format: 'banner', placement: 'bottom_bar', errorCode: String(error.code || 'unknown').replace(/[^a-z0-9_.-]/gi, '_')}).catch(() => undefined);
+          downloadManager.trackEvent('ad_request', {format: 'banner', placement}).catch(() => undefined);
+          downloadManager.trackEvent('ad_failure', {format: 'banner', placement, errorCode: String(error.code || 'unknown').replace(/[^a-z0-9_.-]/gi, '_')}).catch(() => undefined);
           retry();
         }}
-        onPaid={paid => downloadManager.trackEvent('ad_paid', {format: 'banner', placement: 'bottom_bar', currency: paid.currency, micros: Number(paid.valueMicros || Math.round(paid.value * 1_000_000))}).catch(() => undefined)}
+        onPaid={paid => downloadManager.trackEvent('ad_paid', {format: 'banner', placement, currency: paid.currency, precision: paid.precision, cohort: 'baseline', micros: Number(paid.valueMicros || Math.round(paid.value * 1_000_000))}).catch(() => undefined)}
       />
     </View>
   );

@@ -68,6 +68,30 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
   override fun getName() = "VDDownloadManager"
 
   @ReactMethod
+  fun requestData(purpose: String, promise: Promise) {
+    Thread {
+      runCatching {val result = Telemetry.requestData(context, purpose); Arguments.createMap().apply {
+        putString("legacyReference", result.optString("legacyReference", "")); putString("reference", result.getString("reference")); putString("code", result.getString("code")); putString("expiresAt", result.getString("expiresAt"))
+      }}.fold(promise::resolve) {promise.reject("E_DATA_REQUEST", it)}
+    }.start()
+  }
+
+  @ReactMethod
+  fun previewMedia(sourceUrl: String, pageUrl: String, mimeType: String, promise: Promise) {
+    runCatching {
+      require(sourceUrl.startsWith("https://") || sourceUrl.startsWith("http://"))
+      val intent = android.content.Intent(context, com.oldalexhub.videodownloader.player.PlayerActivity::class.java).apply {
+        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        putExtra(com.oldalexhub.videodownloader.player.PlayerActivity.EXTRA_URI, sourceUrl)
+        putExtra(com.oldalexhub.videodownloader.player.PlayerActivity.EXTRA_MIME, mimeType)
+        putExtra("vdPreview", true)
+        putExtra("vdReferer", pageUrl)
+      }
+      context.startActivity(intent); true
+    }.fold(promise::resolve) {promise.reject("E_PREVIEW", it)}
+  }
+
+  @ReactMethod
   fun getBrowserInfo(promise: Promise) {
     Handler(Looper.getMainLooper()).post {
       runCatching {
@@ -138,7 +162,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
       val extension = payload.string("extension").ifBlank { "bin" }.filter { it.isLetterOrDigit() }.take(8).lowercase()
       val finalFilename = sanitizeFilename(payload.string("finalFilename").ifBlank { "$title.$extension" })
       val sourceName = Uri.parse(sourceUrl).lastPathSegment?.substringBefore('?')?.takeIf { it.isNotBlank() } ?: finalFilename
-      val cookie = CookieManager.getInstance().getCookie(sourceUrl) ?: CookieManager.getInstance().getCookie(pageUrl).orEmpty()
+      val cookie = CookieManager.getInstance().getCookie(sourceUrl).orEmpty()
       val headers = JSONObject().apply {
         put("User-Agent", payload.string("userAgent").ifBlank { WebSettings.getDefaultUserAgent(context) })
         pageUrl.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
@@ -195,6 +219,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
       requestNotificationPermission()
       DownloadScheduler.enqueue(context, id, payload.boolean("wifiOnly"))
       Telemetry.record(context, "download_started", JSONObject().apply {
+        put("privateSession", payload.boolean("privateMode"))
         put("sourceHost", runCatching { Uri.parse(sourceUrl).host }.getOrNull())
         put("mediaType", payload.string("mediaType"))
         put("protocol", payload.string("protocol"))
@@ -375,9 +400,14 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun inspectManifest(sourceUrl: String, pageUrl: String, title: String, promise: Promise) {
-    Thread {
-      runCatching {
+  fun inspectManifest(sourceUrl: String, pageUrl: String, title: String, promise: Promise) = inspectManifestForDocument(sourceUrl, pageUrl, title, "legacy", promise)
+
+  @ReactMethod
+  fun cancelInspections(documentId: String, promise: Promise) {InspectionJobs.cancel(documentId); promise.resolve(true)}
+
+  @ReactMethod
+  fun inspectManifestForDocument(sourceUrl: String, pageUrl: String, title: String, documentId: String, promise: Promise) {
+    InspectionJobs.submit(documentId, promise) {
         val connection = URL(sourceUrl).openConnection() as HttpURLConnection
         connection.instanceFollowRedirects = true
         connection.connectTimeout = 10_000
@@ -387,8 +417,20 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
         connection.setRequestProperty("User-Agent", WebSettings.getDefaultUserAgent(context))
         CookieManager.getInstance().getCookie(sourceUrl)?.let { connection.setRequestProperty("Cookie", it) }
         if (connection.responseCode !in 200..299) error("The media manifest could not be loaded")
-        val text = connection.inputStream.bufferedReader().use { it.readText() }
-        connection.disconnect()
+        val text = try {
+          connection.inputStream.use { stream ->
+            val output = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+              if (Thread.currentThread().isInterrupted) error("Inspection cancelled")
+              val count = stream.read(buffer)
+              if (count < 0) break
+              if (output.size() + count > 2 * 1024 * 1024) error("Manifest is too large")
+              output.write(buffer, 0, count)
+            }
+            output.toString("UTF-8")
+          }
+        } finally { connection.disconnect() }
         if (text.contains("ContentProtection", true) || (text.contains("#EXT-X-KEY", true) && !text.contains("METHOD=NONE", true))) {
           throw IllegalStateException("Protected media cannot be downloaded.")
         }
@@ -400,9 +442,9 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
           put("User-Agent", WebSettings.getDefaultUserAgent(context))
           CookieManager.getInstance().getCookie(sourceUrl)?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
         }
-        val inspected = AdaptiveExporter.inspect(context, sourceUrl, requestHeaders)
+        val inspected = AdaptiveExporter.inspect(context, sourceUrl, requestHeaders, if (isHls) "application/x-mpegURL" else "application/dash+xml")
         if (inspected.any { it.protected }) throw IllegalStateException("Protected media cannot be downloaded.")
-        if (inspected.none { it.hasAudio }) throw IllegalStateException("The manifest has no compatible video and audio combination.")
+        if (inspected.isEmpty()) throw IllegalStateException("The manifest has no compatible tracks.")
         val mime = if (isHls) "application/vnd.apple.mpegurl" else "application/dash+xml"
         val extension = if (isHls) "m3u8" else "mpd"
         val results = Arguments.createArray()
@@ -410,75 +452,66 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
           results.pushMap(manifestMap(sourceUrl, pageUrl, title, mime, extension, variant.width, variant.height, variant.bitrate, variant.hasAudio, variant.audioMode, variant.videoCodec, variant.selectionToken, variant.audioCodec, variant.audioLanguage))
         }
         results
-      }.fold(promise::resolve) { error -> promise.reject(if (error.message?.contains("Protected") == true) "E_PROTECTED" else "E_MANIFEST", error.message, error) }
-    }.start()
+    }
   }
 
   @ReactMethod
   fun inspectCandidates(candidates: ReadableArray, promise: Promise) {
-    Thread {
-      runCatching {
-        Arguments.createArray().apply {
-          for (index in 0 until candidates.size()) {
-            val candidate = candidates.getMap(index) ?: continue
-            val sourceUrl = candidate.string("sourceUrl")
-            val pageUrl = candidate.string("pageUrl")
-            val result = Arguments.createMap().apply { putString("candidateKey", candidate.string("candidateKey")) }
-            var connection = URL(sourceUrl).openConnection() as HttpURLConnection
-            fun configure(method: String) {
-              connection.instanceFollowRedirects = true
-              connection.connectTimeout = 10_000
-              connection.readTimeout = 10_000
-              connection.requestMethod = method
-              connection.setRequestProperty("Accept-Encoding", "identity")
-              connection.setRequestProperty("User-Agent", candidate.string("userAgent").ifBlank { WebSettings.getDefaultUserAgent(context) })
-              pageUrl.takeIf { it.isNotBlank() }?.let { connection.setRequestProperty("Referer", it) }
-              CookieManager.getInstance().getCookie(sourceUrl)?.let { connection.setRequestProperty("Cookie", it) }
-            }
-            configure("HEAD")
-            var code = connection.responseCode
-            if (code == 405 || code == 501 || connection.contentType.isNullOrBlank()) {
-              connection.disconnect()
-              connection = URL(sourceUrl).openConnection() as HttpURLConnection
-              configure("GET")
-              connection.setRequestProperty("Range", "bytes=0-4095")
-              code = connection.responseCode
-            }
-            if (code in listOf(401, 403, 404, 410)) {
-              result.putString("inspectionState", "expired")
-              result.putString("supportState", "unsupported")
-              result.putString("unsupportedReason", if (code == 401 || code == 403) "The page session or media link expired" else "The media is no longer available")
-            } else if (code !in 200..299) {
-              result.putString("inspectionState", "unsupported")
-              result.putString("supportState", "unsupported")
-              result.putString("unsupportedReason", "The source rejected inspection (HTTP $code)")
-            } else {
-              val type = connection.contentType?.substringBefore(';')?.trim().orEmpty()
-              val length = connection.getHeaderField("Content-Range")?.substringAfterLast('/')?.toLongOrNull() ?: connection.contentLengthLong.coerceAtLeast(0)
-              result.putString("inspectionState", "ready")
-              result.putString("supportState", "supported")
-              if (type.isNotBlank()) result.putString("mimeType", type)
-              if (length > 0) result.putDouble("estimatedBytes", length.toDouble())
-              result.putBoolean("supportsRange", code == 206 || connection.getHeaderField("Accept-Ranges")?.contains("bytes", true) == true)
-              val extension = type.takeIf { it.isNotBlank() }?.let { mime ->
-                when {
-                  mime.contains("mp4") -> "mp4"
-                  mime.contains("webm") -> "webm"
-                  mime.contains("mpeg") -> if (mime.startsWith("audio")) "mp3" else "mpg"
-                  mime.contains("jpeg") -> "jpg"
-                  mime.contains("png") -> "png"
-                  mime.contains("webp") -> "webp"
-                  else -> null
-                }
-              }
-              extension?.let { result.putString("extension", it); result.putString("container", it.uppercase()) }
-            }
-            connection.disconnect()
-            pushMap(result)
+    val document = if (candidates.size() > 0) candidates.getMap(0)?.string("documentId").orEmpty() else "legacy"
+    InspectionJobs.submit(document, promise) {
+      Arguments.createArray().apply {
+        for (index in 0 until candidates.size().coerceAtMost(20)) {
+          if (Thread.currentThread().isInterrupted) error("Inspection cancelled")
+          val candidate = candidates.getMap(index) ?: continue
+          val sourceUrl = candidate.string("sourceUrl")
+          require(sourceUrl.startsWith("https://") || sourceUrl.startsWith("http://"))
+          val pageUrl = candidate.string("pageUrl")
+          val result = Arguments.createMap().apply {putString("candidateKey", candidate.string("candidateKey"))}
+          val headers = buildMap {
+            put("User-Agent", WebSettings.getDefaultUserAgent(context))
+            if (pageUrl.isNotBlank()) put("Referer", pageUrl)
+            CookieManager.getInstance().getCookie(sourceUrl)?.let {put("Cookie", it)}
           }
+          var connection: HttpURLConnection? = null
+          try {
+            connection = (URL(sourceUrl).openConnection() as HttpURLConnection).apply {
+              connectTimeout = 8000; readTimeout = 8000
+              headers.forEach { (key, value) -> setRequestProperty(key, value) }
+              setRequestProperty("Range", "bytes=0-4095"); setRequestProperty("Accept-Encoding", "identity")
+            }
+            val code = connection.responseCode
+            val mime = connection.contentType?.substringBefore(';')?.trim().orEmpty()
+            if (code !in 200..299) {
+              result.putString("inspectionState", if (code in listOf(401,403,404,410)) "expired" else "unsupported")
+              result.putString("unsupportedReason", "The source rejected verification (HTTP $code). Reload the original page.")
+              result.putString("supportState", "unsupported")
+            } else {
+              val prefix = connection.inputStream.use {input -> val bytes = ByteArray(4096); val count = input.read(bytes); if (count > 0) String(bytes, 0, count, Charsets.ISO_8859_1).trimStart() else ""}
+              if (mime.contains("html", true) || prefix.startsWith("<!doctype", true) || prefix.startsWith("<html", true) || prefix.isEmpty()) error("The server returned a page instead of media")
+              val length = connection.getHeaderField("Content-Range")?.substringAfterLast('/')?.toLongOrNull() ?: connection.contentLengthLong.coerceAtLeast(0)
+              if (length > 0) result.putDouble("estimatedBytes", length.toDouble())
+              result.putBoolean("supportsRange", code == 206)
+              connection.disconnect(); connection = null
+              val expected = candidate.string("mediaType")
+              val verified = if (expected == "image") com.oldalexhub.videodownloader.download.MediaVerifier.inspectImage(sourceUrl, headers)
+                else com.oldalexhub.videodownloader.download.MediaVerifier.inspect(sourceUrl, headers)
+              if (expected == "video" && !verified.video || expected == "audio" && !verified.audio) error("The source does not contain the expected media track")
+              result.putString("inspectionState", "ready"); result.putString("supportState", "supported")
+              result.putBoolean("verifiedTracks", true); result.putBoolean("hasAudio", verified.audio)
+              result.putString("audioMode", if (verified.audio) "muxed" else "none")
+              result.putDouble("durationMs", verified.durationMs.toDouble())
+              result.putInt("width", verified.width); result.putInt("height", verified.height)
+              if (verified.height > 0) {result.putString("qualityLabel", "${verified.height}p"); result.putString("resolution", "${verified.height}p")}
+              if (mime.isNotBlank()) result.putString("mimeType", mime)
+            }
+          } catch (error: Exception) {
+            result.putString("inspectionState", "uncertain")
+            result.putString("unsupportedReason", "Could not verify media. Reload the page and retry.")
+          } finally {connection?.disconnect()}
+          pushMap(result)
         }
-      }.fold(promise::resolve) { error -> promise.reject("E_INSPECTION", error.message, error) }
-    }.start()
+      }
+    }
   }
 
   @ReactMethod
@@ -596,6 +629,7 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
 
   private fun recordDownloadEvent(name: String, record: DownloadRecord) {
     Telemetry.record(context, name, JSONObject().apply {
+      put("privateSession", record.privateDownload)
       put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
       put("mediaType", record.mediaType); put("protocol", record.protocol); put("stage", record.processingStage)
       put("bytes", record.downloadedBytes); put("flowId", record.flowId)

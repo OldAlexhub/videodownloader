@@ -1,101 +1,47 @@
 # Privacy Policy for Video Downloader & Media Saver
 
 Developer: Old Alex Hub
-
-Effective date: 10/30/2026
-
 Contact: info@oldalexhub.com
+Revision: Android quality-remake release (publish alongside the corresponding app and backend)
 
-## Overview
+## The service
 
-Video Downloader & Media Saver is a free Android application supported by advertising. It provides a built-in browser, media detection, background downloads, a local media library, and on-device utility tools. No Old Alex Hub account is required.
+Video Downloader & Media Saver is a free, advertising-supported Android browser, downloader and local media library. No Old Alex Hub account is required. Every capability remains available without subscriptions, credits, speed limits imposed by the app or rewarded-ad gates.
 
-This policy explains which information stays on the device, which limited analytics information is sent to Old Alex Hub, and which information may be processed by third-party advertising services.
+## On your device
 
-## Information stored locally
+The app stores download records and files, source links, temporary fragments, bookmarks, normal browser history and tab navigation state, playback position, cookies, site storage and preferences. Normal tabs can be restored after app recreation. Private tab navigation state stays in memory and private searches, domains, links and playback details are excluded from Old Alex Hub analytics. Files you deliberately download in private browsing remain on the device. Private browsing does not provide anonymity to websites or network operators, or guarantee isolation of every WebView cookie across tabs.
 
-The following information may be stored on the Android device:
+Settings provides local cleanup controls. Removing a library record and deleting its file are separate actions; file deletion requires confirmation. Saved files may also be managed by Android and by the destination folder's provider.
 
-- Download jobs, status, progress, source metadata, filenames, quality, byte counts, and failure details
-- Media files downloaded by the user
-- Local media metadata and file hashes used for duplicate detection
-- Browser history and searches unless private browsing is used
-- Bookmarks
-- WebView cookies, cache, and site storage
-- App settings and advertising frequency state
-- Temporary download fragments needed for pause and resume
+## Old Alex Hub data collection
 
-Private browsing prevents pages from being added to the app's local browser history and uses an incognito WebView session. Private browsing does not make the user anonymous to websites, internet providers, advertising services, or network operators.
+The app sends structured events over HTTPS to https://vd.server.oldalexhub.com. Operational collection covers app sessions, feature use, detection and download outcomes, byte counts, coded failures, app/Android versions, locale, time zone and advertising performance. These measurements support reliability and the sustainable operation of the free app. Existing choices to refuse operational collection are preserved during upgrades.
 
-Users can clear browser history, cookies, cache, temporary fragments, and other local app data from Settings. Deleting a downloaded file requires explicit confirmation.
+Broader behavioral collection is off until you affirmatively choose Allow insights. This purpose includes submitted browser search terms, visited domains, playback measurements and sanitized page/media links for completed downloads. You can decline or withdraw in Settings > Insights consent without losing any feature. Withdrawal clears queued events and prevents new behavioral transmission. An upload already received by the service is handled through the deletion controls below. Private sessions are excluded from behavioral collection even when consent is granted.
 
-## Old Alex Hub analytics
+Completed-download links can include their path. User information, all query parameters and fragments are removed; links that cannot be sanitized are discarded. The service does not receive downloaded media bytes, page content, cookies, credentials or authorization headers. Current clients do not send titles or filenames. Older 1.x clients may have sent title/filename metadata under their former disclosure.
 
-When Share app data is enabled (on by default), the app sends limited events to `https://vd.server.oldalexhub.com`. These events are used for product analysis, user counts, reliability, download performance, and advertising performance.
+An installation reference identifies events without an account. This is pseudonymous, not anonymous. The server stores a keyed hash of that reference. It may derive approximate city/country from the request IP in memory; application analytics storage does not retain raw IP addresses. Hosting infrastructure may maintain separate access/security logs subject to its configured retention. The app does not request precise location for analytics.
 
-Analytics events may include:
+Delivery uses a bounded queue. Losing network access or refusing behavioral consent does not block browsing, downloads, playback or tools.
 
-- A randomly generated installation identifier
-- Event time
-- App version and Android API level
-- Device locale and time zone
-- Completed non-private download page and media links (common authentication query parameters and fragments removed); older 1.x clients may also send title and filename text
-- Source website domain
-- Media type, format, source quality, byte counts, duration, status, and failure code
-- Ad format and placement impression events
-- If Search & website insights is enabled (on by default): submitted search terms and visited website domains, used for aggregate top-term and top-site reports
-- Player-open and app-open events
+## Access and deletion
 
-The analytics server may use the request IP address to derive an approximate city and country, then discards the IP without storing it. The server replaces the random installation identifier with a keyed HMAC hash before database storage. The app does not request Android location permission for analytics and does not send GPS coordinates.
+Settings > Request my data and Request data deletion prepare email drafts addressed to info@oldalexhub.com. Online generation supplies an installation reference and a purpose-bound verification code, valid for seven days. You review and send the draft yourself. Copyable request details are available when an email app is unavailable. A public installation reference alone does not authorize disclosure. Support must authenticate and verify the code before exporting or deleting data. Older installation references require a separate support verification process; they do not become verified merely by appearing in an email.
 
-Share app data and Search & website insights are on by default and can each be disabled in Settings. Search & website insights records terms submitted through the browser address bar and website domains from non-private page visits only when both settings are enabled. Private sessions are excluded. The service receives the search term or site domain, not the visited page path or URL query string. These events appear in aggregate top-term and top-site reports; individual search and site values are hidden in the recent-event dashboard. Turning Search & website insights off removes queued search and site events from the device. Turning Share app data off clears the pending analytics queue.
+Delete server analytics performs immediate online deletion for the current installation, clears pending uploads and rotates the installation reference without changing consent choices. An offline or failed request is reported as unsuccessful so you can retry. A deletion tombstone prevents late retries from restoring deleted events. This minimal keyed reference is retained for replay prevention, separately from raw event data.
 
-The app does not send downloaded media files, video or audio content, WebView cookies, authorization headers, or authentication query parameters from download URLs to the Old Alex Hub analytics service. Full browser history and page content are not sent.
-
-Analytics delivery has short timeouts and a bounded local queue. If the analytics server is unavailable, browsing, downloading, playback, local library access, and other features continue normally. Users can disable Share app data in Settings. Disabling it clears pending analytics events from the app queue.
-
-To request deletion, use Settings > Request data deletion. This opens a draft addressed to info@oldalexhub.com with your anonymous installation reference; you review and send it. You can also use Delete server analytics to remove records directly, including stored download links.
+Raw events are retained for a maximum of 730 days, with scheduled deletion at least hourly while the service is running. Expired request codes are removed on the same schedule. Deployment must enforce a maximum backup lifetime of 30 days and reapply deletion tombstones before restoring a backup into service. Backup expiration is a release requirement, not an app setting. Support email correspondence is separate from app analytics and is used to fulfill and document the request.
 
 ## Advertising
 
-The app uses Google AdMob and Google User Messaging Platform. Google advertising services may process advertising identifiers, approximate location, IP address, device information, app interactions, ad impressions, ad clicks, diagnostics, consent choices, and related advertising data depending on configuration, user consent, region, and device settings.
+Google AdMob and User Messaging Platform provide advertising and consent choices. Depending on consent, region and device settings, Google and its partners may process advertising identifiers, approximate location, IP address, device information, app/ad interactions, diagnostics and consent choices. See https://policies.google.com/privacy for Google's practices. Required UMP privacy options remain available in Settings.
 
-Advertising data is processed under Google's terms and privacy policies. Ads may not load while offline or when an advertising service is unavailable. An ad failure does not block app functionality.
+Native ads are labeled on browser Home and Library; Downloads and Tools use anchored banners. The app shows at most one placement per screen. Eligible interstitials occur at deliberate transitions after completed tasks, never to unlock a capability. Browsing, selection, playback, privacy requests and recovery do not trigger interstitials. Unavailable ads do not delay navigation. Website ads are separate from app advertising.
 
-The app does not use rewarded ads. Ads do not unlock download speed, quality, additional downloads, playback, sharing, or tools.
+## Security and contact
 
-## Internet access
+Analytics transport uses HTTPS. Support endpoints require authenticated access and a verified request code. Web browsing never bypasses certificate errors. No system can promise absolute security; report privacy concerns or access/deletion requests to info@oldalexhub.com.
 
-Internet access is required for web browsing, source downloads, advertising, consent messages, and analytics delivery. Local library functions should remain usable offline when Android can access the stored file.
-
-Media downloads flow directly from the source website to the Android device. Old Alex Hub does not proxy or store the media file.
-
-## Media and copyright responsibility
-
-Only download media you own, have permission to download, or that is made available for downloading by the content provider. Users are responsible for following copyright law, website terms, and applicable permissions.
-
-The app is not designed to bypass DRM, authentication, subscriptions, paid access, paywalls, or content access controls. Protected media is not supported.
-
-## Data retention
-
-Local data remains until the user deletes it, clears app data, removes the app, or Android removes temporary files. Old Alex Hub retains raw analytics events for up to 24 months for product analysis, security, and performance reporting. Events may then be deleted or retained only in aggregated form that is no longer linked to an installation identifier.
-
-Google retains advertising and consent data according to its own policies and account configuration.
-
-## Data security
-
-Old Alex Hub analytics uses HTTPS. Reasonable safeguards should be applied to the analytics service, including access controls, retention limits, and monitoring. No internet transmission or storage system can be guaranteed to be completely secure.
-
-## Children
-
-Video Downloader & Media Saver is a general utility and is not directed to children under 13. Old Alex Hub does not knowingly seek personal information from children through the app. If a parent or guardian believes a child has provided information, use the contact address above to request review or deletion.
-
-## Changes to this policy
-
-This policy may be updated when app features, analytics, advertising configuration, legal requirements, or service providers change. The effective date will be updated when a revised policy is published.
-
-## Contact
-
-For privacy questions or data requests, contact:
-
-info@oldalexhub.com
+Publish this policy and the matching Play Data Safety declaration with the release. Material collection changes require an updated disclosure and, where applicable, a fresh consent choice.

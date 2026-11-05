@@ -13,7 +13,7 @@ import {colors, radius, spacing} from '../theme';
 import {downloadManager} from '../native/DownloadManager';
 import {useAdsReady} from './AdConsentContext';
 
-export function NativeSponsoredCard() {
+export function NativeSponsoredCard({placement = 'browser_home'}: {placement?: string}) {
   const adsReady = useAdsReady();
   const [nativeAd, setNativeAd] = useState<NativeAd | null>(null);
 
@@ -27,16 +27,16 @@ export function NativeSponsoredCard() {
     const load = () => {
       if (!mounted) return;
       if (AppState.currentState !== 'active') { retryTimer = setTimeout(load, 30000); return; }
-      downloadManager.trackEvent('ad_request', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
+      downloadManager.trackEvent('ad_request', {format: 'native', placement}).catch(() => undefined);
       NativeAd.createForAdRequest(adConfig.native, {requestNonPersonalizedAdsOnly: false})
       .then(ad => {
         loadedAd = ad;
-        downloadManager.trackEvent('ad_load', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
+        downloadManager.trackEvent('ad_load', {format: 'native', placement}).catch(() => undefined);
         ad.addAdEventListener(NativeAdEventType.IMPRESSION, () => {
-          downloadManager.trackEvent('ad_impression', {format: 'native', placement: 'browser_home'}).catch(() => undefined);
+          downloadManager.trackEvent('ad_impression', {format: 'native', placement}).catch(() => undefined);
         });
         ad.addAdEventListener(NativeAdEventType.PAID, paid => {
-          downloadManager.trackEvent('ad_paid', {format: 'native', placement: 'browser_home', currency: paid.currency, micros: Number(paid.valueMicros || Math.round(paid.value * 1_000_000))}).catch(() => undefined);
+          downloadManager.trackEvent('ad_paid', {format: 'native', placement, currency: paid.currency, precision: paid.precision, cohort: 'baseline', micros: Number(paid.valueMicros || Math.round(paid.value * 1_000_000))}).catch(() => undefined);
         });
         if (mounted) {
           setNativeAd(ad);
@@ -45,7 +45,7 @@ export function NativeSponsoredCard() {
         }
       })
       .catch(error => {
-        downloadManager.trackEvent('ad_failure', {format: 'native', placement: 'browser_home', errorCode: String(error?.code || 'unknown').replace(/[^a-z0-9_.-]/gi, '_')}).catch(() => undefined);
+        downloadManager.trackEvent('ad_failure', {format: 'native', placement, errorCode: String(error?.code || 'unknown').replace(/[^a-z0-9_.-]/gi, '_')}).catch(() => undefined);
         if (mounted) retryTimer = setTimeout(load, Math.min(300000, 30000 * 2 ** Math.min(failures++, 4)));
       });
     };
@@ -55,7 +55,7 @@ export function NativeSponsoredCard() {
       clearTimeout(retryTimer);
       loadedAd?.destroy();
     };
-  }, [adsReady]);
+  }, [adsReady, placement]);
 
   if (!adsReady || !nativeAd) {
     return null;

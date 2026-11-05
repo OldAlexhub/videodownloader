@@ -17,6 +17,8 @@ interface EnqueueOptions {
 }
 
 interface NativeDownloadManagerShape {
+  previewMedia?(sourceUrl: string, pageUrl: string, mimeType: string): Promise<boolean>;
+  requestData?(purpose: string): Promise<{reference: string; legacyReference?: string; code: string; expiresAt: string}>;
   listDownloads(): Promise<DownloadItem[]>;
   enqueueDownload(payload: Record<string, unknown>): Promise<string>;
   enqueueDownloads?(payloads: Array<Record<string, unknown>>): Promise<string[]>;
@@ -40,6 +42,8 @@ interface NativeDownloadManagerShape {
   setUsageInsightsEnabled(enabled: boolean): Promise<boolean>;
   trackEvent(name: string, properties: Record<string, string | number | boolean>): Promise<boolean>;
   trackUsageInsight(name: 'search_performed' | 'site_visited', properties: Record<string, string>): Promise<boolean>;
+  cancelInspections?(documentId: string): Promise<boolean>;
+  inspectManifestForDocument?(sourceUrl: string, pageUrl: string, title: string, documentId: string): Promise<DetectedMedia[]>;
   inspectManifest(sourceUrl: string, pageUrl: string, title: string): Promise<DetectedMedia[]>;
   inspectCandidates?(candidates: DetectedMedia[]): Promise<Array<Partial<DetectedMedia> & {candidateKey: string}>>;
   setKeepScreenAwake(enabled: boolean): Promise<boolean>;
@@ -62,6 +66,8 @@ function requireNative(): NativeDownloadManagerShape {
 export const downloadManager = {
   getBrowserInfo: () => requireNative().getBrowserInfo(),
   getAnalyticsDeletionReference: () => requireNative().getAnalyticsDeletionReference(),
+  preview: (media: DetectedMedia) => requireNative().previewMedia?.(media.sourceUrl, media.pageUrl, media.mimeType) ?? Promise.reject(new Error('Preview unavailable')),
+  requestData: (purpose: 'access' | 'delete') => requireNative().requestData?.(purpose) ?? Promise.reject(new Error('Update required')),
   list: () => requireNative().listDownloads(),
   enqueue: ({media, cookie, userAgent, privateMode, destinationUri, wifiOnly, parallelDownloads, resumeAutomatically, smartFilename, finalFilename, flowId}: EnqueueOptions) => {
     const sourceBase = (() => {
@@ -147,7 +153,8 @@ export const downloadManager = {
   setUsageInsightsEnabled: (enabled: boolean) => requireNative().setUsageInsightsEnabled(enabled),
   trackEvent: (name: string, properties: Record<string, string | number | boolean> = {}) => requireNative().trackEvent(name, properties),
   trackUsageInsight: (name: 'search_performed' | 'site_visited', properties: Record<string, string>) => requireNative().trackUsageInsight(name, properties),
-  inspectManifest: (sourceUrl: string, pageUrl: string, title: string) => requireNative().inspectManifest(sourceUrl, pageUrl, title),
+  cancelInspections: (documentId: string) => requireNative().cancelInspections?.(documentId) ?? Promise.resolve(false),
+  inspectManifest: (sourceUrl: string, pageUrl: string, title: string, documentId = '') => requireNative().inspectManifestForDocument?.(sourceUrl, pageUrl, title, documentId) ?? requireNative().inspectManifest(sourceUrl, pageUrl, title),
   inspectCandidates: (candidates: DetectedMedia[]) => requireNative().inspectCandidates?.(candidates) ?? Promise.resolve([]),
   setKeepScreenAwake: (enabled: boolean) => requireNative().setKeepScreenAwake(enabled),
   deleteServerAnalytics: () => requireNative().deleteServerAnalytics?.() ?? Promise.resolve(false),

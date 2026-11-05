@@ -37,5 +37,5 @@ test('detector skips ad containers and retracts a source when a reused player en
   advertising = false; rescan();
   expect(messages.some(message => message.type === 'media')).toBe(true);
   advertising = true; rescan();
-  expect(messages.at(-1)).toEqual({type: 'mediaRejected', url: node.currentSrc});
+  expect(messages.at(-1)).toMatchObject({type: 'mediaRejected', url: node.currentSrc});
 });

@@ -7,28 +7,19 @@ function protocolOf(item: MediaVariant): NonNullable<MediaVariant['protocol']> {
   return 'progressive';
 }
 
-function normalizedStem(url: string): string {
-  try {
-    const value = new URL(url);
-    return value.pathname
-      .replace(/\.(m3u8|mpd|mp4|m4v|webm|mov|mp3|m4a|aac|ogg|wav|flac|jpe?g|png|webp)$/i, '')
-      .replace(/(?:^|[-_./])(2160|1440|1080|720|480|360|240)p?(?=$|[-_./])/i, '')
-      .replace(/(?:^|[-_./])(high|medium|low|hd|sd|uhd|fhd)(?=$|[-_./])/ig, '')
-      .replace(/\/+$/, '') || value.hostname;
-  } catch {
-    return url;
-  }
-}
-
 export function assetKey(item: MediaVariant): string {
   if (item.assetId) return item.assetId;
   const explicit = item.groupKey && !item.groupKey.includes('|Detected media|') ? item.groupKey : '';
   if (explicit) return explicit;
-  return `${item.documentId || item.pageUrl}|${item.mediaType}|${normalizedStem(item.sourceUrl)}`;
+  return `${item.documentId || item.pageUrl}|${item.mediaType}|${item.sourceUrl}`;
 }
 
 export function variantUsable(item: MediaVariant): boolean {
-  return !item.isProtected && (item.inspectionState === undefined || item.inspectionState === 'ready') && item.supportState !== 'unsupported';
+  return item.classification !== 'advertisement' && !item.isProtected && item.inspectionState === 'ready' && item.supportState !== 'unsupported';
+}
+
+export function primaryVariant(item: MediaVariant): boolean {
+  return variantUsable(item) && item.classification !== 'uncertain';
 }
 
 export function assetCountLabel(assets: DetectedAsset[]): string {
@@ -70,7 +61,7 @@ export function chooseVariant(items: MediaVariant[], preference: 'best' | 'balan
 export function groupMedia(items: MediaVariant[], documentId = ''): DetectedAsset[] {
   const groups = new Map<string, MediaVariant[]>();
   items
-    .filter(item => !documentId || !item.documentId || item.documentId === documentId)
+    .filter(item => (!documentId || item.documentId === documentId) && item.classification !== 'advertisement')
     .forEach(item => {
       const key = assetKey(item);
       groups.set(key, [...(groups.get(key) || []), {...item, protocol: protocolOf(item)}]);
@@ -92,17 +83,34 @@ export function groupMedia(items: MediaVariant[], documentId = ''): DetectedAsse
 }
 
 export function upsertVariant(current: MediaVariant[], incoming: MediaVariant): MediaVariant[] {
-  const key = incoming.candidateKey || incoming.id;
-  const existingIndex = current.findIndex(item => (item.candidateKey || item.id) === key || item.sourceUrl === incoming.sourceUrl && item.qualityLabel === incoming.qualityLabel);
-  let next: MediaVariant[];
-  if (existingIndex >= 0) {
-    next = [...current];
-    next[existingIndex] = {...next[existingIndex], ...incoming, confidence: Math.max(next[existingIndex].confidence, incoming.confidence)};
-  } else {
-    next = [...current, incoming];
+  const sameResource = (item: MediaVariant) => item.documentId === incoming.documentId && item.sourceUrl === incoming.sourceUrl;
+  const sameVariant = (item: MediaVariant) => sameResource(item) && (item.selectionToken || '') === (incoming.selectionToken || '');
+  const existing = current.find(sameVariant);
+  // A DOM/player relationship is stronger than an unassociated network observation.
+  const anchored = current.find(item => sameResource(item) && item.playerId);
+  const assetId = incoming.playerId ? incoming.assetId : anchored?.assetId || incoming.assetId;
+  const nextIncoming = {...incoming, assetId, groupKey: assetId || incoming.groupKey};
+  if (existing) {
+    if (existing.inspectionState === 'ready' && incoming.inspectionState === 'probing') {
+      // An observation adds identity evidence; it cannot erase verified track metadata.
+      Object.assign(nextIncoming, {
+        inspectionState: existing.inspectionState, supportState: existing.supportState,
+        verifiedTracks: existing.verifiedTracks, hasAudio: existing.hasAudio, audioMode: existing.audioMode,
+        durationMs: existing.durationMs, width: existing.width, height: existing.height,
+        qualityLabel: existing.qualityLabel, resolution: existing.resolution,
+        estimatedBytes: existing.estimatedBytes, mimeType: existing.mimeType,
+      });
+    }
+    if (existing.classification === 'content' && incoming.classification === 'uncertain') nextIncoming.classification = 'content';
+    nextIncoming.playerId = incoming.playerId || existing.playerId;
+    nextIncoming.confidence = Math.max(existing.confidence, incoming.confidence);
   }
-  return next
+  const next = current.filter(item => !sameVariant(item)).map(item =>
+    sameResource(item) && assetId ? {...item, assetId, groupKey: assetId, classification: nextIncoming.classification || item.classification} : item);
+  next.push({...existing, ...nextIncoming});
+  // Remove the pending manifest placeholder once actual tracks are known.
+  return next.filter(item => !(item.isManifest && !item.selectionToken && next.some(other => other.documentId === item.documentId && other.sourceUrl === item.sourceUrl && other.selectionToken)))
     .filter(item => !(item.mediaType === 'image' && item.width && item.height && item.width * item.height < 120000))
-    .sort((a, b) => qualityScore(b) - qualityScore(a) || b.confidence - a.confidence)
+    .sort((a, b) => Number(primaryVariant(b)) - Number(primaryVariant(a)) || b.confidence - a.confidence)
     .slice(0, 80);
 }

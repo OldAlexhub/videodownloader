@@ -1,4 +1,4 @@
-import React, {PropsWithChildren, ReactNode, useEffect} from 'react';
+import React, {PropsWithChildren, ReactNode, useEffect, useRef} from 'react';
 import {BackHandler, Pressable, StyleSheet, Text, View} from 'react-native';
 import {Bot, Download, Globe2, Library, Settings} from 'lucide-react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
@@ -19,7 +19,8 @@ const tabs: Array<{key: TabKey; label: string; icon: (color: string) => ReactNod
 export function AppShell({children}: PropsWithChildren) {
   const {activeTab, setActiveTab, downloads} = useApp();
   const insets = useSafeAreaInsets();
-  const showBanner = activeTab !== 'browser';
+  const showBanner = activeTab === 'downloads' || activeTab === 'tools';
+  const navigating = useRef(false);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -33,7 +34,7 @@ export function AppShell({children}: PropsWithChildren) {
   return (
     <View style={[styles.shell, {paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right}]}>
       <View style={styles.content}>{children}</View>
-      {showBanner ? <SafeAdContainer /> : null}
+      {showBanner ? <SafeAdContainer placement={activeTab} /> : null}
       <View style={[styles.bottomBar, {paddingBottom: insets.bottom}]}>
         {tabs.map(tab => {
           const active = tab.key === activeTab;
@@ -44,10 +45,12 @@ export function AppShell({children}: PropsWithChildren) {
               accessibilityState={{selected: active}}
               key={tab.key}
               onPress={() => {
-                const naturalBreak = activeTab !== tab.key && (activeTab === 'downloads' || activeTab === 'library');
+                if (navigating.current) return;
+                const naturalBreak = activeTab !== tab.key && ['downloads', 'library'].includes(activeTab) && ['downloads','library','tools'].includes(tab.key);
                 if (naturalBreak) {
-                  const completed = downloads.filter(item => item.status === 'completed').length;
-                  interstitialController.naturalBreak(completed >= 2).finally(() => setActiveTab(tab.key));
+                  const completed = downloads.filter(item => item.status === 'completed' && (item.completedAt || 0) >= interstitialController.sessionStartedAt).length;
+                  navigating.current = true;
+                  interstitialController.naturalBreak(completed >= 2).finally(() => {navigating.current = false; setActiveTab(tab.key);});
                 } else setActiveTab(tab.key);
               }}
               style={styles.tab}>

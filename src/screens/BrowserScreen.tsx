@@ -1,8 +1,11 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Clipboard from '@react-native-clipboard/clipboard';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   Alert,
   BackHandler,
+  AppState,
+  findNodeHandle,
   Image,
   Linking,
   Modal,
@@ -23,7 +26,6 @@ import {
   History,
   Home,
   LockKeyhole,
-  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
@@ -40,13 +42,12 @@ import {colors, radius, spacing} from '../theme';
 import {inferMediaFromUrl, MEDIA_DETECTOR_SCRIPT, normalizeAddress, submittedSearchTerm, WEBSITE_AD_BLOCKER_SCRIPT} from '../utils/browser';
 import {downloadManager} from '../native/DownloadManager';
 import {remoteConfig} from '../native/RemoteConfig';
-import {assetCountLabel, groupMedia, variantUsable} from '../utils/media';
+import {assetCountLabel, groupMedia, variantUsable, upsertVariant, primaryVariant} from '../utils/media';
 
-interface BrowserTab {
-  id: string;
-  url: string;
-  title: string;
-}
+import {isAdvertisingUrl} from '../utils/adDetection';
+import type {MediaVariant} from '../types';
+import {browserSession} from '../native/BrowserSession';
+import {BrowserTab, closingTab, newBrowserTab, persistableSession, restoreTabs, SESSION_KEY, COMPATIBILITY_KEY} from '../browser/session';
 
 interface ContextTarget {
   url: string;
@@ -56,39 +57,129 @@ interface ContextTarget {
 
 const HOME = '';
 
+type TabProps = {
+  tab: BrowserTab; tabs: BrowserTab[]; selected: boolean;
+  setTabs: React.Dispatch<React.SetStateAction<BrowserTab[]>>;
+  select: (id: string) => void; close: (id: string) => void;
+  externalTarget?: string; consumeTarget: () => void;
+  register: (id: string, save: (() => Promise<boolean>) | null) => void;
+};
+
 export function BrowserScreen() {
-  const webView = useRef<any>(null);
-  const lastReportedVisit = useRef<{tabId: string; url: string} | undefined>(undefined);
-  const AndroidWebView = WebView as any;
-  const {
-    browserTarget,
-    browserResetKey,
-    bookmarks,
-    detectedMedia,
-    addDetectedMedia,
-    clearDetectedMedia,
-    rejectDetectedMedia,
-    enqueueSelections,
-    history,
-    addHistory,
-    toggleBookmark,
-    settings,
-    activeTab,
-    setActiveTab,
-    updateSettings,
-  } = useApp();
-  const browserResetKeyRef = useRef(browserResetKey);
-  const blockerSetting = useRef(settings.blockWebsiteAds);
-  const [tabs, setTabs] = useState<BrowserTab[]>([{id: 'initial', url: HOME, title: 'New tab'}]);
+  const {browserResetKey, browserTarget, settings} = useApp();
+  const [tabs, setTabs] = useState<BrowserTab[]>(() => [{...newBrowserTab(settings.privateByDefault), id: 'initial'}]);
   const [activeId, setActiveId] = useState('initial');
-  const active = tabs.find(tab => tab.id === activeId) || tabs[0];
+  const [live, setLive] = useState(['initial']);
+  const liveRef = useRef(live); liveRef.current = live;
+  const selectedRef = useRef(activeId); selectedRef.current = activeId;
+  const [navigationTarget, setNavigationTarget] = useState<{id:string; url:string}>();
+  const deliveredTarget = useRef<string | undefined>(undefined);
+  const [hydrated, setHydrated] = useState(false);
+  const savers = useRef(new Map<string, () => Promise<boolean>>());
+  const switching = useRef(Promise.resolve());
+  const resetRef = useRef(browserResetKey);
+  const register = useCallback((id: string, save: (() => Promise<boolean>) | null) => {
+    if (save) savers.current.set(id, save); else savers.current.delete(id);
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(SESSION_KEY).then(value => {
+      if (!alive) return;
+      const restored = restoreTabs(value);
+      if (restored) {setTabs(restored.tabs); setActiveId(restored.activeId); setLive([restored.activeId]);}
+    }).catch(() => undefined).finally(() => {if (alive) setHydrated(true);});
+    return () => {alive = false;};
+  }, []);
+  useEffect(() => {
+    if (hydrated) AsyncStorage.setItem(SESSION_KEY, persistableSession(tabs, activeId)).catch(() => undefined);
+  }, [tabs, activeId, hydrated]);
+  useEffect(() => {
+    if (resetRef.current === browserResetKey) return;
+    resetRef.current = browserResetKey;
+    const tab = newBrowserTab();
+    setTabs([tab]); setActiveId(tab.id); setLive([tab.id]);
+    browserSession.clear().catch(() => undefined);
+  }, [browserResetKey]);
+  useEffect(() => {
+    if (hydrated && browserTarget && deliveredTarget.current !== browserTarget) {
+      deliveredTarget.current = browserTarget;
+      setNavigationTarget({id: activeId, url: browserTarget});
+    }
+  }, [hydrated, browserTarget, activeId]);
+  const select = (id: string) => {
+    switching.current = switching.current.then(async () => {
+      // Save before removing a view: unmounting first loses the native back stack.
+      const currentLive = liveRef.current;
+      if (!currentLive.includes(id) && currentLive.length >= 3) {
+        const victim = currentLive.find(value => value !== selectedRef.current) || currentLive[0];
+        const saved = await savers.current.get(victim)?.();
+        if (saved === false) {Alert.alert('Tab could not be saved', 'Close a tab before opening another. Your page has been kept.'); return;}
+        setLive(current => [...current.filter(value => value !== victim && value !== id), id]);
+      } else setLive(current => [...current.filter(value => value !== id), id]);
+      setActiveId(id);
+    }).catch(() => Alert.alert('Tab unavailable', 'Please try again. Your current page has been kept.'));
+  };
+  const close = (id: string) => {
+    const next = closingTab(tabs, id, activeId);
+    browserSession.remove(id).catch(() => undefined);
+    setTabs(next.tabs);
+    setLive(current => current.filter(value => value !== id));
+    select(next.activeId);
+  };
+  if (!hydrated) return <View style={styles.screen}><Text style={styles.heroBody}>Restoring your browser...</Text></View>;
+  return <View style={styles.screen}>{tabs.filter(tab => live.includes(tab.id)).map(tab =>
+    <View key={tab.id} style={tab.id === activeId ? styles.screen : styles.inactiveTab} accessibilityElementsHidden={tab.id !== activeId} importantForAccessibility={tab.id === activeId ? 'auto' : 'no-hide-descendants'}>
+      <BrowserTabScreen tab={tab} tabs={tabs} selected={tab.id === activeId} setTabs={setTabs} select={select} close={close} register={register} externalTarget={navigationTarget?.id === tab.id ? navigationTarget.url : undefined} consumeTarget={() => setNavigationTarget(undefined)} />
+    </View>)}</View>;
+}
+
+function BrowserTabScreen({tab: active, tabs, selected, setTabs, select, close, register, externalTarget, consumeTarget}: TabProps) {
+  const webView = useRef<any>(null);
+  const scriptRef = useRef('');
+  const nativeContainer = useRef<React.ElementRef<typeof View>>(null);
+  const AndroidWebView = WebView as any;
+  const {bookmarks, enqueueSelections, history, addHistory, toggleBookmark, settings, activeTab, setActiveTab, updateSettings} = useApp();
+  const activeId = active.id;
+  const [detectedMedia, setDetectedMedia] = useState<MediaVariant[]>([]);
+  const addDetectedMedia = useCallback((item: MediaVariant) => setDetectedMedia(current => upsertVariant(current, item)), []);
+  const clearDetectedMedia = useCallback(() => setDetectedMedia([]), []);
+  const rejectDetectedMedia = useCallback((url: string) => setDetectedMedia(current => current.filter(item => item.sourceUrl !== url)), []);
+  const blockerSetting = useRef(settings.blockWebsiteAds);
+  const [commandUrl, setCommandUrl] = useState<string | undefined>(undefined);
+  const [viewGeneration, setViewGeneration] = useState(0);
+  const restored = useRef(false);
+  const save = useCallback(async () => {
+    const tag = findNodeHandle(nativeContainer.current);
+    return tag ? browserSession.save(tag, activeId, Boolean(active.privateMode)) : true;
+  }, [activeId, active.privateMode]);
+  useEffect(() => {register(activeId, save); return () => register(activeId, null);}, [activeId, register, save]);
+  useEffect(() => {
+    if (!active.url || restored.current) return;
+    const tag = findNodeHandle(nativeContainer.current);
+    restored.current = true;
+    if (!tag) {setCommandUrl(active.url); return;}
+    browserSession.attach(tag, activeId).then(() => browserSession.configureScript(tag, scriptRef.current)).then(() => browserSession.restore(tag, activeId, Boolean(active.privateMode)))
+      .then((found: boolean) => {if (!found) setCommandUrl(active.url);}).catch(() => setCommandUrl(active.url));
+  }, [active.url, activeId, active.privateMode, viewGeneration]);
+  useEffect(() => {
+    const listener = AppState.addEventListener('change', state => {if (state !== 'active') save().catch(() => undefined);});
+    return () => listener.remove();
+  }, [save]);
+  useEffect(() => {
+    if (!selected) webView.current?.injectJavaScript('document.querySelectorAll("video,audio").forEach(n=>n.pause());true;');
+  }, [selected]);
   const [address, setAddress] = useState('');
   const [pageTitle, setPageTitle] = useState('New tab');
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [progress, setProgress] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [privateMode, setPrivateMode] = useState(settings.privateByDefault);
+  const privateMode = Boolean(active.privateMode);
+  const setPrivateMode = (value: boolean | ((previous: boolean) => boolean)) => {
+    const next = typeof value === 'function' ? value(privateMode) : value;
+    setTabs(current => current.map(tab => tab.id === activeId ? {...tab, privateMode: next} : tab));
+    browserSession.remove(activeId).catch(() => undefined);
+  };
   const [qualityVisible, setQualityVisible] = useState(false);
   const [tabsVisible, setTabsVisible] = useState(false);
   const [libraryVisible, setLibraryVisible] = useState<'history' | 'bookmarks' | null>(null);
@@ -101,10 +192,16 @@ export function BrowserScreen() {
   try { siteOrigin = new URL(active.url).origin; } catch { /* New tab. */ }
   const compatibilityMode = compatibilitySites.has(siteOrigin);
   const documentSequence = useRef(0);
-  const initialDocumentId = 'initial:0';
+  const initialDocumentId = `${activeId}:0`;
   const [documentId, setDocumentId] = useState(initialDocumentId);
   const documentIdRef = useRef(initialDocumentId);
+  const lastReportedVisit = useRef<{tabId: string; url: string} | undefined>(undefined);
+  const playerGenerations = useRef(new Map<string, number>());
+  const nativeDocument = useRef('');
+  const topDocumentTime = useRef(0);
+  const frameDocuments = useRef(new Map<string, string>());
   const rejectedMedia = useRef(new Set<string>());
+  const manuallyRejected = useRef(new Set<string>());
   const inspectedManifests = useRef(new Set<string>());
   const inspectedCandidates = useRef(new Set<string>());
   const lastStartedUrl = useRef('');
@@ -112,18 +209,28 @@ export function BrowserScreen() {
   const scanStartedAt = useRef(0);
   const completedScanDocument = useRef('');
   const detectorBootstrap = `window.__VDMS_CONFIG__=${JSON.stringify({minimumImagePixels: remoteConfig.current().detector.minimumImagePixels})};true;`;
-  const injectedScript = settings.blockWebsiteAds
-    ? `${detectorBootstrap}\n${WEBSITE_AD_BLOCKER_SCRIPT}\n${MEDIA_DETECTOR_SCRIPT}`
-    : `${detectorBootstrap}\n${MEDIA_DETECTOR_SCRIPT}`;
+  const detectorScript = remoteConfig.current().killSwitches?.enhancedDetection ? '' : MEDIA_DETECTOR_SCRIPT;
+  const injectedScript = settings.blockWebsiteAds && !compatibilityMode
+    ? `${detectorBootstrap}\n${WEBSITE_AD_BLOCKER_SCRIPT}\n${detectorScript}`
+    : `${detectorBootstrap}\n${detectorScript}`;
+
+  scriptRef.current = injectedScript;
+  useEffect(() => {
+    const tag = findNodeHandle(nativeContainer.current);
+    if (tag) browserSession.configureScript(tag, injectedScript).catch(() => undefined);
+  }, [injectedScript]);
 
   const startDocument = useCallback((tabId = activeId) => {
     setHttpStatus(undefined);
     setError(undefined);
+    downloadManager.cancelInspections(documentIdRef.current).catch(() => undefined);
     documentSequence.current += 1;
     const nextDocumentId = `${tabId}:${documentSequence.current}`;
     documentIdRef.current = nextDocumentId;
     setDocumentId(nextDocumentId);
+    playerGenerations.current.clear();
     rejectedMedia.current.clear();
+    manuallyRejected.current.clear();
     inspectedManifests.current.clear();
     inspectedCandidates.current.clear();
     setScanningCount(0);
@@ -136,7 +243,8 @@ export function BrowserScreen() {
     if (!compatibilityReload.current) return;
     compatibilityReload.current = false;
     startDocument();
-    webView.current?.reload();
+    const tag = findNodeHandle(nativeContainer.current);
+    (tag ? browserSession.configureScript(tag, scriptRef.current) : Promise.resolve()).finally(() => webView.current?.reload());
   }, [compatibilitySites, startDocument]);
 
   const toggleCompatibility = () => {
@@ -146,6 +254,7 @@ export function BrowserScreen() {
       const next = new Set(current);
       if (next.has(siteOrigin)) next.delete(siteOrigin);
       else next.add(siteOrigin);
+      if (!privateMode) AsyncStorage.setItem(COMPATIBILITY_KEY, JSON.stringify([...next])).catch(() => undefined);
       return next;
     });
   };
@@ -155,43 +264,21 @@ export function BrowserScreen() {
   };
 
   useEffect(() => {
-    if (!browserTarget) {
+    if (!externalTarget || !selected) {
       return;
     }
-    const target = browserTarget.replace(/([#&])vdms=\d+$/, '');
+    const target = externalTarget.replace(/([#&])vdms=\d+$/, '');
     navigate(target);
+    consumeTarget();
     // browserTarget intentionally represents an external navigation event.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserTarget]);
+  }, [externalTarget]);
 
   useEffect(() => {
-    setPrivateMode(settings.privateByDefault);
-  }, [settings.privateByDefault]);
-
-  useEffect(() => {
-    if (browserResetKeyRef.current === browserResetKey) {
-      return;
-    }
-    browserResetKeyRef.current = browserResetKey;
-    setTabs([{id: 'initial', url: HOME, title: 'New tab'}]);
-    setActiveId('initial');
-    setAddress('');
-    setPageTitle('New tab');
-    setCanGoBack(false);
-    setCanGoForward(false);
-    setProgress(0);
-    setLoading(false);
-    setPrivateMode(false);
-    setQualityVisible(false);
-    setTabsVisible(false);
-    setLibraryVisible(null);
-    setContextTarget(undefined);
-    setError(undefined);
-    setHttpStatus(undefined);
-    setCompatibilitySites(new Set());
-    lastReportedVisit.current = undefined;
-    clearDetectedMedia();
-  }, [browserResetKey, clearDetectedMedia]);
+    AsyncStorage.getItem(COMPATIBILITY_KEY).then(value => {
+      try { const sites = JSON.parse(value || '[]'); if (Array.isArray(sites)) setCompatibilitySites(new Set(sites.filter(site => typeof site === 'string'))); } catch { /* Ignore invalid preferences. */ }
+    }).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (blockerSetting.current === settings.blockWebsiteAds) {
@@ -217,6 +304,7 @@ export function BrowserScreen() {
     startDocument();
     setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: nextUrl} : tab));
     setAddress(nextUrl);
+    setCommandUrl(nextUrl);
   };
 
   const submitAddress = (input: string) => {
@@ -230,10 +318,11 @@ export function BrowserScreen() {
   const updateNavigation = (navigation: WebViewNavigation) => {
     setAddress(navigation.url);
     setPageTitle(navigation.title || navigation.url);
-    setCanGoBack(navigation.canGoBack);
-    setCanGoForward(navigation.canGoForward);
+    setCanGoBack(Boolean(navigation.canGoBack));
+    setCanGoForward(Boolean(navigation.canGoForward));
     setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: navigation.url, title: navigation.title || navigation.url} : tab));
     if (!navigation.loading) {
+      save().catch(() => undefined);
       if (!privateMode && settings.analyticsEnabled && settings.usageInsightsEnabled && /^https?:\/\//i.test(navigation.url)) {
         const previous = lastReportedVisit.current;
         if (previous?.tabId !== activeId || previous.url !== navigation.url) {
@@ -251,9 +340,22 @@ export function BrowserScreen() {
   };
 
   const handleMessage = (event: WebViewMessageEvent) => {
-    if (compatibilityMode) return;
     try {
       const payload = JSON.parse(event.nativeEvent.data);
+      if (payload.documentTime && payload.documentTime < topDocumentTime.current) return;
+      if (payload.type === 'documentStarted') {
+        if (payload.frameId === 'main') {
+          if (frameDocuments.current.get('main') && frameDocuments.current.get('main') !== payload.documentToken) {
+            startDocument(); frameDocuments.current.clear();
+          }
+          topDocumentTime.current = payload.documentTime || 0;
+        }
+        frameDocuments.current.set(payload.frameId || 'main', payload.documentToken);
+        return;
+      }
+      if (payload.documentToken && frameDocuments.current.get(payload.frameId || 'main') !== payload.documentToken) return;
+      if (payload.type === 'media' && manuallyRejected.current.has(payload.url)) return;
+      if (payload.type === 'media' && payload.meta?.elementId && !isAdvertisingUrl(payload.url)) rejectedMedia.current.delete(payload.url);
       if (payload.type === 'mediaRejected' && typeof payload.url === 'string') {
         rejectedMedia.current.add(payload.url);
         rejectDetectedMedia(payload.url);
@@ -312,17 +414,26 @@ export function BrowserScreen() {
         }
         const candidateDocumentId = documentIdRef.current;
         const elementId = String(payload.meta?.elementId || '').slice(0, 120);
-        const relationship = String(payload.meta?.manifestParent || payload.meta?.poster || '').slice(0, 240);
+        const generation = Number(payload.meta?.generation) || 0;
+        if (elementId) {
+          if ((playerGenerations.current.get(elementId) || 0) > generation) return;
+          playerGenerations.current.set(elementId, generation);
+          setDetectedMedia(current => current.filter(item => item.playerId !== elementId || item.playbackGeneration === generation));
+        }
+        const currentPlayer = () => !elementId || playerGenerations.current.get(elementId) === generation;
         const assetId = elementId
-          ? `${candidateDocumentId}:element:${elementId}`
-          : found.isManifest
-            ? `${candidateDocumentId}:manifest:${found.sourceUrl.split('?')[0]}`
-            : `${candidateDocumentId}:source:${found.sourceUrl.split('?')[0]}`;
+          ? `${candidateDocumentId}:player:${elementId}:${generation}`
+          : `${candidateDocumentId}:resource:${found.sourceUrl}`;
         const enriched = {
           ...found,
           candidateKey: `${candidateDocumentId}:${found.sourceUrl}`,
           assetId,
-          groupKey: `${assetId}:${relationship}`,
+          groupKey: assetId,
+          playerId: elementId || undefined,
+          frameId: String(payload.frameId || 'main'),
+          playbackGeneration: generation,
+          classification: elementId ? 'content' as const : 'uncertain' as const,
+          evidence: [elementId ? 'player-source' : 'resource-observation'],
           documentId: candidateDocumentId,
           width: Number(payload.meta?.width) || found.width,
           height: Number(payload.meta?.height) || found.height,
@@ -330,21 +441,22 @@ export function BrowserScreen() {
           qualityLabel: payload.meta?.height ? `${payload.meta.height}p` : found.qualityLabel,
           thumbnailUrl: payload.meta?.poster || undefined,
           durationMs: Number(payload.meta?.duration) > 0 ? Math.round(Number(payload.meta.duration) * 1000) : found.durationMs,
-          audioMode: payload.meta?.muted ? 'none' as const : found.audioMode,
+          audioMode: found.audioMode,
           detectionSource: (payload.meta?.source || (found.isManifest ? 'manifest' : 'element')) as typeof found.detectionSource,
-          inspectionState: found.isManifest ? 'probing' as const : 'ready' as const,
+          inspectionState: 'probing' as const,
           confidence: found.confidence + (payload.meta?.active ? 20 : 0) + (payload.meta?.prominent ? 10 : 0),
         };
         if (found.isManifest) {
-          const manifestKey = `${candidateDocumentId}:${found.sourceUrl}`;
+          const manifestKey = `${candidateDocumentId}:${found.sourceUrl}:${elementId}:${generation}`;
           if (inspectedManifests.current.has(manifestKey)) return;
           inspectedManifests.current.add(manifestKey);
           addDetectedMedia(enriched);
           setScanningCount(count => count + 1);
-          downloadManager.inspectManifest(found.sourceUrl, active.url, enriched.title)
+          downloadManager.inspectManifest(found.sourceUrl, active.url, enriched.title, candidateDocumentId)
             .then(items => {
-              if (candidateDocumentId !== documentIdRef.current || rejectedMedia.current.has(found.sourceUrl)) return;
+              if (candidateDocumentId !== documentIdRef.current || !currentPlayer() || rejectedMedia.current.has(found.sourceUrl)) return;
               items.forEach((item, index) => addDetectedMedia({
+                ...enriched,
                 ...item,
                 candidateKey: index === 0 ? enriched.candidateKey : `${manifestKey}:variant:${item.selectionToken || index}`,
                 assetId,
@@ -355,7 +467,7 @@ export function BrowserScreen() {
               }));
             })
             .catch(manifestError => {
-              if (candidateDocumentId !== documentIdRef.current || rejectedMedia.current.has(found.sourceUrl)) return;
+              if (candidateDocumentId !== documentIdRef.current || !currentPlayer() || rejectedMedia.current.has(found.sourceUrl)) return;
               const message = String(manifestError);
               addDetectedMedia({
                 ...enriched,
@@ -369,20 +481,20 @@ export function BrowserScreen() {
               if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
             });
         } else {
-          const probeKey = `${candidateDocumentId}:${found.sourceUrl}`;
+          const probeKey = `${candidateDocumentId}:${found.sourceUrl}:${elementId}:${generation}`;
           if (inspectedCandidates.current.has(probeKey)) {
-            addDetectedMedia(enriched);
+            setDetectedMedia(current => current.map(item => item.sourceUrl === enriched.sourceUrl && enriched.playerId ? {...item, assetId: enriched.assetId, groupKey: enriched.assetId, playerId: enriched.playerId, classification: 'content'} : item));
             return;
           }
           inspectedCandidates.current.add(probeKey);
           addDetectedMedia({...enriched, inspectionState: 'probing'});
           setScanningCount(count => count + 1);
           downloadManager.inspectCandidates([enriched]).then(results => {
-            if (candidateDocumentId !== documentIdRef.current || rejectedMedia.current.has(found.sourceUrl)) return;
+            if (candidateDocumentId !== documentIdRef.current || !currentPlayer() || rejectedMedia.current.has(found.sourceUrl)) return;
             const probed = results[0];
-            addDetectedMedia(probed ? {...enriched, ...probed} : {...enriched, inspectionState: 'ready'});
+            addDetectedMedia(probed ? {...enriched, ...probed} : {...enriched, inspectionState: 'uncertain', unsupportedReason: 'Media could not be verified'});
           }).catch(() => {
-            if (candidateDocumentId === documentIdRef.current && !rejectedMedia.current.has(found.sourceUrl)) addDetectedMedia({...enriched, inspectionState: 'ready'});
+            if (candidateDocumentId === documentIdRef.current && currentPlayer() && !rejectedMedia.current.has(found.sourceUrl)) addDetectedMedia({...enriched, inspectionState: 'uncertain', unsupportedReason: 'Inspection failed. Reload the page and try again.'});
           }).finally(() => {
             if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
           });
@@ -393,50 +505,31 @@ export function BrowserScreen() {
     }
   };
 
-  const openNewTab = (url = HOME, title = 'New tab') => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setTabs(current => [...current, {id, url, title}]);
-    setActiveId(id);
-    setAddress(url);
-    setPageTitle(title);
-    setCanGoBack(false);
-    setCanGoForward(false);
-    setError(undefined);
-    setTabsVisible(false);
-    startDocument(id);
-  };
-
-  const newTab = () => openNewTab();
-
-  const closeTab = (id: string) => {
-    if (id === activeId) {
-      setCanGoBack(false);
-      setCanGoForward(false);
-      setError(undefined);
-      startDocument(id);
+  const messageHandler = useRef(handleMessage);
+  messageHandler.current = handleMessage;
+  useEffect(() => browserSession.subscribe(observation => {
+    if (observation.tabId !== activeId) return;
+    if (!observation.url) {
+      if (nativeDocument.current !== observation.documentId) startDocument();
+      nativeDocument.current = observation.documentId;
+      lastStartedUrl.current = observation.pageUrl;
+      return;
     }
-    setTabs(current => {
-      const remaining = current.filter(tab => tab.id !== id);
-      if (remaining.length === 0) {
-        const replacement = {id: `${Date.now()}`, url: HOME, title: 'New tab'};
-        setActiveId(replacement.id);
-        return [replacement];
-      }
-      if (id === activeId) {
-        setActiveId(remaining[remaining.length - 1].id);
-      }
-      return remaining;
-    });
-  };
+    if (observation.documentId !== nativeDocument.current) return;
+    messageHandler.current({nativeEvent: {data: JSON.stringify({type:'media', url:observation.url, meta:{source:'native'}})}} as WebViewMessageEvent);
+  }), [activeId, startDocument]);
+  useEffect(() => () => {downloadManager.cancelInspections(documentIdRef.current).catch(() => undefined);}, []);
 
-  const selectTab = (id: string) => {
-    setActiveId(id);
-    setCanGoBack(false);
-    setCanGoForward(false);
-    setError(undefined);
+  const openNewTab = (url = HOME, title = 'New tab') => {
+    if (tabs.length >= 30) {Alert.alert('Tab limit reached', 'Close a tab to open another.'); return;}
+    const tab = {...newBrowserTab(privateMode), url, title, parentId: url ? activeId : undefined};
+    setTabs(current => [...current, tab]);
     setTabsVisible(false);
-    startDocument(id);
+    select(tab.id);
   };
+  const newTab = () => openNewTab();
+  const closeTab = (id: string) => {setTabsVisible(false); close(id);};
+  const selectTab = (id: string) => {setTabsVisible(false); select(id);};
 
   const pageItems = useMemo(() => detectedMedia.filter(item => item.documentId === documentId), [detectedMedia, documentId]);
   const pageAssets = useMemo(() => groupMedia(pageItems, documentId), [documentId, pageItems]);
@@ -460,9 +553,21 @@ export function BrowserScreen() {
     }).catch(() => undefined);
   }, [active.url, documentId, pageAssets, pageItems, privateMode, scanningCount, settings.analyticsEnabled]);
 
+  const goBack = useCallback(async () => {
+    const tag = findNodeHandle(nativeContainer.current);
+    const result = tag ? await browserSession.back(tag).catch(() => 'unavailable') : 'unavailable';
+    if (result === 'fullscreen' || result === 'history') return;
+    if (result === 'unavailable' && canGoBack) {webView.current?.goBack(); return;}
+    if (active.parentId) {close(activeId); return;}
+    restored.current = false; setCommandUrl(undefined);
+    browserSession.remove(activeId).catch(() => undefined);
+    setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: HOME, title:'New tab'} : tab));
+    setAddress(''); setPageTitle('New tab'); setCanGoBack(false); setCanGoForward(false); startDocument();
+  }, [active.parentId, activeId, canGoBack, close, setTabs, startDocument]);
+
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (activeTab !== 'browser') {
+      if (!selected || activeTab !== 'browser') {
         return false;
       }
       if (contextTarget) {
@@ -481,24 +586,11 @@ export function BrowserScreen() {
         setLibraryVisible(null);
         return true;
       }
-      if (active.url && canGoBack) {
-        webView.current?.goBack();
-        return true;
-      }
-      if (active.url) {
-        setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: HOME, title: 'New tab'} : tab));
-        setAddress('');
-        setPageTitle('New tab');
-        setCanGoBack(false);
-        setCanGoForward(false);
-        setError(undefined);
-        startDocument();
-        return true;
-      }
+      if (active.url || active.parentId) {goBack(); return true;}
       return false;
     });
     return () => subscription.remove();
-  }, [active.url, activeId, activeTab, canGoBack, contextTarget, libraryVisible, qualityVisible, startDocument, tabsVisible]);
+  }, [goBack, selected, active.parentId, close, active.url, activeId, activeTab, canGoBack, contextTarget, libraryVisible, qualityVisible, startDocument, tabsVisible]);
 
   const openDetectedMedia = () => {
     if (!privateMode && settings.analyticsEnabled) downloadManager.trackEvent('picker_opened', {assetCount: pageAssets.length, variantCount: pageItems.filter(variantUsable).length}).catch(() => undefined);
@@ -511,8 +603,8 @@ export function BrowserScreen() {
         <SafeScrollView contentContainerStyle={styles.homeContent}>
           <View style={styles.brandRow}>
             <Image source={require('../../assets/logo.png')} style={styles.logo} />
-            <View style={styles.brandCopy}><Text style={styles.brand}>Video Downloader</Text><Text style={styles.tagline}>Detect. Choose. Download.</Text></View>
-            <Pressable onPress={() => setPrivateMode(value => !value)} style={[styles.privateButton, privateMode && styles.privateActive]}>
+            <View style={styles.brandCopy}><Text style={styles.brand}>Video Downloader</Text><Text style={styles.tagline}>Your videos. Ready offline.</Text></View>
+            <Pressable accessibilityRole="button" accessibilityLabel={privateMode ? "Turn off private browsing" : "Start private browsing"} onPress={() => setPrivateMode(value => !value)} style={[styles.privateButton, privateMode && styles.privateActive]}>
               <ShieldCheck color={privateMode ? colors.white : colors.blue700} size={19} />
             </Pressable>
           </View>
@@ -540,9 +632,9 @@ export function BrowserScreen() {
           </View>
           <View style={styles.heroCard}>
             <View style={styles.heroIcon}><Globe2 color={colors.teal500} size={28} /></View>
-            <Text style={styles.heroTitle}>Download media from supported websites</Text>
-            <Text style={styles.heroBody}>Browse to media you are authorized to save. Available downloadable media will appear automatically.</Text>
-            <Text style={styles.legal}>Only download media you own, have permission to download, or that the content provider makes available for downloading.</Text>
+            <Text style={styles.heroTitle}>Find the video. Keep the moment.</Text>
+            <Text style={styles.heroBody}>{'1  Open a page and start its video.\n2  Preview the verified result.\n3  Save it in your preferred quality.'}</Text>
+            <Text style={styles.legal}>Save content you own or have permission to download. All qualities and tools are free.</Text>
           </View>
           {bookmarks.length > 0 ? (
             <View style={styles.homeSection}>
@@ -550,7 +642,7 @@ export function BrowserScreen() {
               {bookmarks.slice(0, 4).map(item => <Pressable key={item.id} onPress={() => navigate(item.url)} style={styles.linkRow}><Globe2 color={colors.blue600} size={17} /><Text numberOfLines={1} style={styles.linkText}>{item.title}</Text></Pressable>)}
             </View>
           ) : null}
-          <NativeSponsoredCard />
+          {selected && activeTab === 'browser' ? <NativeSponsoredCard /> : null}
         </SafeScrollView>
         <BrowserToolbar tabs={tabs.length} onTabs={() => setTabsVisible(true)} onNew={newTab} />
         <ListModal type={libraryVisible} history={history} bookmarks={bookmarks} onClose={() => setLibraryVisible(null)} onOpen={url => {setLibraryVisible(null); navigate(url);}} />
@@ -562,10 +654,11 @@ export function BrowserScreen() {
   return (
     <View style={styles.screen}>
       <View style={styles.addressRow}>
-        <Pressable disabled={!canGoBack} onPress={() => webView.current?.goBack()} style={styles.navButton}><ArrowLeft color={canGoBack ? colors.ink : '#B8C3D1'} size={20} /></Pressable>
+        <Pressable accessibilityLabel="Go back" onPress={goBack} style={styles.navButton}><ArrowLeft color={canGoBack ? colors.ink : '#B8C3D1'} size={20} /></Pressable>
         <View style={styles.addressBar}>
           <LockKeyhole color={active.url.startsWith('https://') ? colors.success : colors.warning} size={14} />
           <TextInput
+            accessibilityLabel="Page address"
             autoCapitalize="none"
             autoCorrect={false}
             onChangeText={setAddress}
@@ -577,7 +670,7 @@ export function BrowserScreen() {
             value={address}
           />
         </View>
-        <Pressable onPress={() => webView.current?.reload()} style={styles.navButton}><RefreshCw color={colors.ink} size={19} /></Pressable>
+        <Pressable accessibilityLabel="Reload page" onPress={() => webView.current?.reload()} style={styles.navButton}><RefreshCw color={colors.ink} size={19} /></Pressable>
       </View>
       {loading ? <View style={styles.progressTrack}><View style={[styles.progressFill, {width: `${Math.max(4, progress * 100)}%`}]} /></View> : null}
       {httpStatus || compatibilityMode ? (
@@ -586,18 +679,18 @@ export function BrowserScreen() {
             <Text style={styles.recoveryTitle}>{httpStatus ? `Website response: ${httpStatus}` : 'Site compatibility mode'}</Text>
             {httpStatus ? <Pressable accessibilityLabel="Dismiss website response notice" onPress={() => setHttpStatus(undefined)}><X color={colors.muted} size={18} /></Pressable> : null}
           </View>
-          <Text style={styles.recoveryBody}>{compatibilityMode ? 'Page modifications and automatic media detection are paused for this site. Restore them after the page opens.' : 'The website is still visible below. Complete any verification it shows, or try compatibility mode if it stays stuck.'}</Text>
+          <Text style={styles.recoveryBody}>{compatibilityMode ? 'Website filtering is paused. Media detection remains available.' : 'The website is still visible below. Complete any verification it shows, or try compatibility mode if it stays stuck.'}</Text>
           <View style={styles.recoveryActions}>
             <Pressable accessibilityRole="button" onPress={() => webView.current?.reload()}><Text style={styles.recoveryAction}>Retry</Text></Pressable>
-            <Pressable accessibilityRole="button" onPress={toggleCompatibility}><Text style={styles.recoveryAction}>{compatibilityMode ? 'Restore detection' : 'Try compatibility mode'}</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={toggleCompatibility}><Text style={styles.recoveryAction}>{compatibilityMode ? 'Restore filtering' : 'Try compatibility mode'}</Text></Pressable>
             <Pressable accessibilityRole="button" onPress={openExternalBrowser}><Text style={styles.recoveryAction}>Open in browser</Text></Pressable>
           </View>
         </View>
       ) : null}
-      <AndroidWebView
-          key={active.id}
+      <View ref={nativeContainer} collapsable={false} style={styles.webView}><AndroidWebView
+          key={`${active.id}:${viewGeneration}`}
           ref={webView}
-          source={{uri: active.url}}
+          source={commandUrl ? {uri: commandUrl} : undefined}
           style={styles.webView}
           javaScriptEnabled
           domStorageEnabled={!privateMode}
@@ -608,8 +701,8 @@ export function BrowserScreen() {
           setSupportMultipleWindows
           allowsFullscreenVideo
           mediaPlaybackRequiresUserAction
-          injectedJavaScriptBeforeContentLoaded={!compatibilityMode && settings.blockWebsiteAds ? WEBSITE_AD_BLOCKER_SCRIPT : undefined}
-          injectedJavaScript={compatibilityMode ? undefined : injectedScript}
+          injectedJavaScriptBeforeContentLoaded={injectedScript}
+          injectedJavaScript={injectedScript}
           onMessage={handleMessage}
           onNavigationStateChange={updateNavigation}
           onLoadStart={(event: {nativeEvent: {url?: string}}) => {
@@ -623,71 +716,42 @@ export function BrowserScreen() {
             setHttpStatus(undefined);
           }}
           onLoadProgress={(event: {nativeEvent: {progress: number}}) => setProgress(event.nativeEvent.progress)}
-          onLoadEnd={() => setLoading(false)}
+          onLoadEnd={() => {setLoading(false); webView.current?.injectJavaScript("window.dispatchEvent(new Event('vdms:rescan'));true;"); save().catch(() => undefined);}}
+          onRenderProcessGone={() => {startDocument(); restored.current = false; setCommandUrl(undefined); setViewGeneration(value => value + 1); setError('The browser stopped. Your saved page is being restored.');}}
           onError={(event: {nativeEvent: {description?: string}}) => {setLoading(false); setError(event.nativeEvent.description || 'Check your connection and try again.');}}
           // HTTP errors can contain a usable page or an interactive browser check.
           // Keep that response rendered; only transport failures get an overlay.
-          onHttpError={(event: {nativeEvent: {statusCode: number}}) => {if (event.nativeEvent.statusCode >= 400) setHttpStatus(event.nativeEvent.statusCode);}}
+          onHttpError={(event: {nativeEvent: {statusCode: number; url?: string}}) => {if ((!event.nativeEvent.url || event.nativeEvent.url === active.url) && event.nativeEvent.statusCode >= 400) setHttpStatus(event.nativeEvent.statusCode);}}
           onOpenWindow={(event: {nativeEvent: {targetUrl?: string}}) => {
             const targetUrl = event.nativeEvent.targetUrl || '';
             if (/^https?:\/\//i.test(targetUrl)) openNewTab(targetUrl, targetUrl);
           }}
           onShouldStartLoadWithRequest={(request: {url: string; isTopFrame?: boolean}) => {
-            if (compatibilityMode) return true;
-            const candidate = inferMediaFromUrl(request.url, active.url, pageTitle);
-            if (candidate && !rejectedMedia.current.has(candidate.sourceUrl)) {
-              const candidateDocumentId = documentIdRef.current;
-              const scopedAssetId = `${candidateDocumentId}:navigation:${candidate.sourceUrl.split('?')[0]}`;
-              const scoped = {
-                ...candidate,
-                candidateKey: `${candidateDocumentId}:${candidate.sourceUrl}`,
-                assetId: scopedAssetId,
-                groupKey: scopedAssetId,
-                documentId: candidateDocumentId,
-                detectionSource: 'navigation',
-                inspectionState: 'probing',
-              } as const;
-              addDetectedMedia(scoped);
-              const inspectionKey = `${candidateDocumentId}:${candidate.sourceUrl}`;
-              if (candidate.isManifest && !inspectedManifests.current.has(inspectionKey)) {
-                inspectedManifests.current.add(inspectionKey);
-                setScanningCount(count => count + 1);
-                downloadManager.inspectManifest(candidate.sourceUrl, active.url, pageTitle).then(items => {
-                  if (candidateDocumentId !== documentIdRef.current || rejectedMedia.current.has(candidate.sourceUrl)) return;
-                  items.forEach((item, index) => addDetectedMedia({...item, candidateKey: index === 0 ? scoped.candidateKey : `${inspectionKey}:variant:${item.selectionToken || index}`, assetId: scopedAssetId, groupKey: scopedAssetId, documentId: candidateDocumentId, detectionSource: 'manifest', inspectionState: 'ready'}));
-                }).catch(manifestFailure => {
-                  if (candidateDocumentId === documentIdRef.current && !rejectedMedia.current.has(candidate.sourceUrl)) addDetectedMedia({...scoped, inspectionState: 'unsupported', supportState: 'unsupported', unsupportedReason: /live/i.test(String(manifestFailure)) ? 'Live streams are not supported' : /protected|drm|encrypted/i.test(String(manifestFailure)) ? 'Protected media is not supported' : 'This stream could not be inspected'});
-                }).finally(() => {
-                  if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
-                });
-              } else if (!candidate.isManifest && !inspectedCandidates.current.has(inspectionKey)) {
-                inspectedCandidates.current.add(inspectionKey);
-                setScanningCount(count => count + 1);
-                downloadManager.inspectCandidates([scoped]).then(results => {
-                  if (candidateDocumentId === documentIdRef.current && !rejectedMedia.current.has(candidate.sourceUrl)) addDetectedMedia(results[0] ? {...scoped, ...results[0]} : scoped);
-                }).finally(() => {
-                  if (candidateDocumentId === documentIdRef.current) setScanningCount(count => Math.max(0, count - 1));
-                });
-              }
+            if (!/^https?:\/\//i.test(request.url)) {
+              if (/^(about:blank|blob:)/i.test(request.url)) return true;
+              if (request.isTopFrame !== false && /^(mailto:|tel:|intent:)/i.test(request.url)) Alert.alert('Open another app?', 'This link opens outside Video Downloader.', [{text:'Cancel', style:'cancel'}, {text:'Open', onPress: () => Linking.openURL(request.url).catch(() => Alert.alert('App unavailable', 'No installed app can open this link.'))}]);
+              return false;
             }
+            if (settings.blockWebsiteAds && !compatibilityMode && isAdvertisingUrl(request.url)) return false;
+            handleMessage({nativeEvent: {data: JSON.stringify({type:'media', url:request.url, meta:{source:'navigation'}})}} as WebViewMessageEvent);
             return true;
           }}
-        />
+        /></View>
       {error ? (
         <View testID="browser-network-error" style={styles.errorState}><Globe2 color={colors.muted} size={38} /><Text style={styles.errorTitle}>Page could not be loaded</Text><Text style={styles.errorBody}>{error}</Text><Pressable onPress={() => {setError(undefined); webView.current?.reload();}} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable><Pressable onPress={openExternalBrowser} style={styles.externalRecovery}><Text style={styles.recoveryAction}>Open in browser</Text></Pressable></View>
       ) : null}
       {pageAssets.length > 0 || scanningCount > 0 ? (
         <Pressable onPress={openDetectedMedia} style={styles.mediaFound}>
           <Download color={colors.white} size={18} />
-          <Text style={styles.mediaFoundText}>{scanningCount > 0 ? 'Scanning media…' : `${assetCountLabel(pageAssets)} · ${pageItems.filter(variantUsable).length} quality options`}</Text>
+          <Text style={styles.mediaFoundText}>{scanningCount > 0 ? 'Verifying media…' : `${assetCountLabel(pageAssets.filter(asset => asset.variants.some(primaryVariant)))} ready · View results`}</Text>
         </Pressable>
       ) : null}
       <View style={styles.webToolbar}>
-        <Pressable disabled={!canGoBack} onPress={() => webView.current?.goBack()} style={styles.webAction}><ArrowLeft color={canGoBack ? colors.ink : '#B8C3D1'} size={21} /></Pressable>
-        <Pressable disabled={!canGoForward} onPress={() => webView.current?.goForward()} style={styles.webAction}><ArrowRight color={canGoForward ? colors.ink : '#B8C3D1'} size={21} /></Pressable>
-        <Pressable onPress={() => {setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: HOME, title: 'New tab'} : tab)); setAddress(''); startDocument();}} style={styles.webAction}><Home color={colors.ink} size={21} /></Pressable>
-        <Pressable onPress={() => toggleBookmark(pageTitle, active.url)} style={styles.webAction}><Bookmark color={saved ? colors.blue700 : colors.ink} fill={saved ? colors.blue700 : 'transparent'} size={21} /></Pressable>
-        <Pressable onPress={() => Share.share({message: active.url, title: pageTitle})} style={styles.webAction}><Share2 color={colors.ink} size={21} /></Pressable>
+        <Pressable accessibilityLabel="Go back" onPress={goBack} style={styles.webAction}><ArrowLeft color={canGoBack ? colors.ink : '#B8C3D1'} size={21} /></Pressable>
+        <Pressable accessibilityLabel="Go forward" disabled={!canGoForward} onPress={() => webView.current?.goForward()} style={styles.webAction}><ArrowRight color={canGoForward ? colors.ink : '#B8C3D1'} size={21} /></Pressable>
+        <Pressable onPress={() => {restored.current = false; setCommandUrl(undefined); browserSession.remove(activeId).catch(() => undefined); setTabs(current => current.map(tab => tab.id === activeId ? {...tab, url: HOME, title: 'New tab'} : tab)); setAddress(''); startDocument();}} style={styles.webAction}><Home color={colors.ink} size={21} /></Pressable>
+        <Pressable accessibilityLabel={saved ? "Remove bookmark" : "Bookmark page"} onPress={() => toggleBookmark(pageTitle, active.url)} style={styles.webAction}><Bookmark color={saved ? colors.blue700 : colors.ink} fill={saved ? colors.blue700 : 'transparent'} size={21} /></Pressable>
+        <Pressable accessibilityLabel="Share page" onPress={() => Share.share({message: active.url, title: pageTitle})} style={styles.webAction}><Share2 color={colors.ink} size={21} /></Pressable>
         <Pressable onPress={() => setTabsVisible(true)} style={styles.tabCount}><Text style={styles.tabCountText}>{tabs.length}</Text></Pressable>
       </View>
       <QualitySheet
@@ -700,7 +764,8 @@ export function BrowserScreen() {
           if (destination) updateSettings({destinationUri: destination.uri, destinationName: destination.name});
         }}
         onClose={() => setQualityVisible(false)}
-        onIncorrect={() => {
+        onIncorrect={asset => {
+          asset.variants.forEach(item => {manuallyRejected.current.add(item.sourceUrl); rejectedMedia.current.add(item.sourceUrl); rejectDetectedMedia(item.sourceUrl);});
           if (!privateMode && settings.analyticsEnabled) downloadManager.trackEvent('media_result_incorrect', {
             assetCount: pageAssets.length,
             variantCount: pageItems.length,
@@ -708,6 +773,12 @@ export function BrowserScreen() {
           }).catch(() => undefined);
           Alert.alert('Feedback noted', privateMode || !settings.analyticsEnabled ? 'Nothing was sent because analytics is off for this session.' : 'Anonymous detector details were queued. No page or media URL was included.');
         }}
+        onPreview={variant => {downloadManager.preview(variant).catch(() => Alert.alert('Preview unavailable', 'Play this video on the original page to verify it.'));}}
+        onRetry={asset => {asset.variants.forEach(item => {
+          inspectedCandidates.current.clear();
+          inspectedManifests.current.delete(`${documentIdRef.current}:${item.sourceUrl}`);
+          handleMessage({nativeEvent:{data:JSON.stringify({type:'media', url:item.sourceUrl, meta:{elementId:item.playerId, generation:item.playbackGeneration, source:item.detectionSource}})}} as WebViewMessageEvent);
+        });}}
         onVariantSelected={variant => {
           if (!privateMode && settings.analyticsEnabled) downloadManager.trackEvent('variant_selected', {
             protocol: variant.protocol || 'progressive',
@@ -735,7 +806,7 @@ export function BrowserScreen() {
             if (!contextMedia) return;
             setContextTarget(undefined);
             const candidateDocumentId = documentIdRef.current;
-            const scopedAssetId = `${candidateDocumentId}:context:${contextMedia.sourceUrl.split('?')[0]}`;
+            const scopedAssetId = `${candidateDocumentId}:context:${contextMedia.sourceUrl}`;
             const scoped = {
               ...contextMedia,
               candidateKey: `${candidateDocumentId}:${contextMedia.sourceUrl}`,
@@ -754,7 +825,7 @@ export function BrowserScreen() {
                 items.forEach((item, index) => addDetectedMedia({...item, candidateKey: index === 0 ? scoped.candidateKey : `${scoped.candidateKey}:variant:${item.selectionToken || index}`, assetId: scopedAssetId, groupKey: scopedAssetId, documentId: candidateDocumentId, detectionSource: 'manifest', inspectionState: 'ready'}));
               })
               : downloadManager.inspectCandidates([scoped]).then(items => {
-                if (candidateDocumentId === documentIdRef.current) addDetectedMedia(items[0] ? {...scoped, ...items[0]} : {...scoped, inspectionState: 'ready'});
+                if (candidateDocumentId === documentIdRef.current) addDetectedMedia(items[0] ? {...scoped, ...items[0]} : {...scoped, inspectionState: 'uncertain'});
               });
             inspection.catch(inspectionFailure => {
               if (candidateDocumentId === documentIdRef.current) addDetectedMedia({...scoped, inspectionState: 'unsupported', supportState: 'unsupported', unsupportedReason: /live/i.test(String(inspectionFailure)) ? 'Live streams are not supported' : /protected|drm|encrypted/i.test(String(inspectionFailure)) ? 'Protected media is not supported' : 'This media could not be inspected'});
@@ -773,7 +844,10 @@ function QuickAction({icon, label, onPress}: {icon: React.ReactNode; label: stri
 }
 
 function BrowserToolbar({tabs, onTabs, onNew}: {tabs: number; onTabs: () => void; onNew: () => void}) {
-  return <View style={styles.webToolbar}><View style={styles.webAction}><Home color={colors.blue700} size={21} /></View><View style={styles.webAction}><ArrowLeft color="#B8C3D1" size={21} /></View><Pressable onPress={onNew} style={styles.webAction}><Plus color={colors.ink} size={22} /></Pressable><Pressable onPress={onTabs} style={styles.tabCount}><Text style={styles.tabCountText}>{tabs}</Text></Pressable><Pressable onPress={onTabs} style={styles.webAction}><MoreHorizontal color={colors.ink} size={22} /></Pressable></View>;
+  return <View style={styles.webToolbar}>
+    <Pressable accessibilityRole="button" accessibilityLabel="Open tabs" onPress={onTabs} style={styles.webAction}><Text style={styles.quickLabel}>{tabs} open {tabs === 1 ? 'tab' : 'tabs'}</Text></Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel="New tab" onPress={onNew} style={[styles.webAction, styles.newTabAction]}><Plus color={colors.blue700} size={22} /><Text style={styles.quickLabel}>New tab</Text></Pressable>
+  </View>;
 }
 
 function TabsModal({visible, tabs, activeId, onClose, onNew, onSelect, onRemove}: {visible: boolean; tabs: BrowserTab[]; activeId: string; onClose: () => void; onNew: () => void; onSelect: (id: string) => void; onRemove: (id: string) => void}) {
@@ -827,6 +901,8 @@ function ContextAction({icon, label, onPress, last = false}: {icon: React.ReactN
 }
 
 const styles = StyleSheet.create({
+  inactiveTab: {display: 'none'},
+  newTabAction: {flexDirection: 'row', gap: 8},
   screen: {flex: 1, backgroundColor: colors.surface},
   homeContent: {padding: spacing.lg, paddingBottom: spacing.xl},
   brandRow: {flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xl},
@@ -847,7 +923,7 @@ const styles = StyleSheet.create({
   heroCard: {backgroundColor: colors.blue950, borderRadius: radius.xl, padding: spacing.xl},
   heroIcon: {width: 48, height: 48, borderRadius: 16, backgroundColor: 'rgba(17,199,233,0.13)', alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md},
   heroTitle: {fontSize: 20, lineHeight: 26, fontWeight: '900', color: colors.white},
-  heroBody: {fontSize: 14, lineHeight: 21, color: '#D8E7FF', marginTop: spacing.sm},
+  heroBody: {fontSize: 15, lineHeight: 27, color: '#D8E7FF', marginTop: spacing.sm},
   legal: {fontSize: 11, lineHeight: 17, color: '#AFC7E8', marginTop: spacing.md},
   homeSection: {marginTop: spacing.xl},
   sectionTitle: {fontSize: 17, fontWeight: '800', color: colors.ink, marginBottom: spacing.sm},

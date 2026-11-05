@@ -77,6 +77,12 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
         else -> downloadHttp(record, record.sourceUrl)
       }
       ensureNotStopped()
+      database.update(id, ContentValues().apply {put("status", "processing"); put("processing_stage", "verifying")})
+      setForeground(foregroundInfo(database.get(id) ?: record, 100, "Verifying media", false))
+      val verified = try {MediaVerifier.verify(resultFile, record.mediaType, record.audioMode, record.durationMs)}
+        catch (error: Exception) {throw DownloadFailure("E_INVALID_MEDIA", error.message ?: "The downloaded media could not be verified. Reload the original page.")}
+      if (verified != null) database.update(id, ContentValues().apply {put("duration_ms", verified.durationMs); put("audio_mode", if (verified.audio) "muxed" else "none")})
+      ensureNotStopped()
       database.update(id, ContentValues().apply { put("status", "processing"); put("processing_stage", "saving") })
       setForeground(foregroundInfo(database.get(id) ?: record, 100, "Saving to device", false))
       val current = database.get(id) ?: record
@@ -97,6 +103,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       })
       val finished = database.get(id) ?: current
       Telemetry.record(applicationContext, "download_completed", JSONObject().apply {
+        put("privateSession", finished.privateDownload)
         if (!finished.privateDownload) {
           Telemetry.shareableLink(finished.pageUrl)?.let { put("pageUrl", it) }
           Telemetry.shareableLink(finished.sourceUrl)?.let { put("sourceUrl", it) }
@@ -221,6 +228,7 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
           if (!firstByteReported) {
             firstByteReported = true
             Telemetry.record(applicationContext, "download_first_byte", JSONObject().apply {
+              put("privateSession", record.privateDownload)
               put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull()); put("mediaType", record.mediaType)
               put("protocol", record.protocol); put("stage", "downloading"); put("elapsedMs", System.currentTimeMillis() - (record.startedAt ?: record.createdAt)); put("flowId", record.flowId)
             })
@@ -265,7 +273,8 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       put("final_filename", replaceExtension(record.finalFilename, "mp4"))
     })
     Telemetry.record(applicationContext, "download_combine_started", JSONObject().apply {
-      put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
+      put("privateSession", record.privateDownload)
+              put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
       put("mediaType", record.mediaType); put("protocol", protocol); put("stage", "combining"); put("flowId", record.flowId)
     })
     val output = partFile(applicationContext, id)
@@ -274,7 +283,8 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       if (progress > 0 && !firstByteReported) {
         firstByteReported = true
         Telemetry.record(applicationContext, "download_first_byte", JSONObject().apply {
-          put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull()); put("mediaType", record.mediaType)
+          put("privateSession", record.privateDownload)
+              put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull()); put("mediaType", record.mediaType)
           put("protocol", protocol); put("stage", "combining"); put("elapsedMs", System.currentTimeMillis() - (record.startedAt ?: record.createdAt)); put("flowId", record.flowId)
         })
       }
@@ -284,7 +294,8 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
       put("estimated_bytes", exported.length()); put("downloaded_bytes", exported.length()); put("progress", 100.0)
     })
     Telemetry.record(applicationContext, "download_combine_completed", JSONObject().apply {
-      put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
+      put("privateSession", record.privateDownload)
+              put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
       put("mediaType", record.mediaType); put("protocol", protocol); put("stage", "combining"); put("bytes", exported.length()); put("flowId", record.flowId)
     })
     return exported
@@ -533,7 +544,8 @@ class DownloadWorker(context: Context, parameters: WorkerParameters) : Coroutine
     })
     database.get(id)?.let { record ->
       Telemetry.record(applicationContext, "download_failed", JSONObject().apply {
-        put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
+        put("privateSession", record.privateDownload)
+              put("sourceHost", runCatching { Uri.parse(record.sourceUrl).host }.getOrNull())
         put("mediaType", record.mediaType)
         put("protocol", record.protocol)
         put("stage", record.processingStage)

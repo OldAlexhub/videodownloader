@@ -25,10 +25,6 @@ object Telemetry {
     val uri = android.net.Uri.parse(value)
     if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.host.isNullOrBlank() || !uri.userInfo.isNullOrBlank() || value.length > 8192) return null
     val builder = uri.buildUpon().fragment(null).clearQuery()
-    val sensitive = Regex("(?i)^(token|access_token|refresh_token|auth|authorization|signature|sig|key|api_key|apikey|password|passwd|session|sessionid|jwt|policy|key-pair-id|hdnea|hdnts|expires|x-amz-.*|x-goog-.*)$")
-    for (name in uri.queryParameterNames) {
-      if (!sensitive.matches(name)) uri.getQueryParameters(name).forEach { builder.appendQueryParameter(name, it) }
-    }
     builder.build().toString().takeIf { it.length <= 4096 }
   }.getOrNull()
   private const val BASE_URL = "https://vd.server.oldalexhub.com"
@@ -37,6 +33,8 @@ object Telemetry {
   private const val PREFS = "privacy_settings"
   private const val ENABLED = "analytics_enabled"
   private const val USAGE_INSIGHTS_ENABLED = "usage_insights_enabled"
+  private const val INSTALL_TOKEN = "installation_proof_v3"
+  private const val CONSENT_VERSION = "consent_version"
   private const val INSTALL_ID = "install_id"
   private const val SEQUENCE = "event_sequence"
   private const val CONFIG_REVISION = "config_revision"
@@ -49,22 +47,32 @@ object Telemetry {
   @Volatile private var deletionInProgress = false
   @Volatile private var sessionId = UUID.randomUUID().toString()
   private val sequence = AtomicLong(-1)
+  private val privacyEpoch = AtomicLong(0)
 
   fun setEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(ENABLED, enabled).apply()
-    if (!enabled) queue(context).clear()
+    synchronized(lock) {
+      privacyEpoch.incrementAndGet()
+      context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(ENABLED, enabled).apply()
+      if (!enabled) queue(context).clear()
+    }
   }
 
   fun isEnabled(context: Context): Boolean =
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(ENABLED, true)
 
   fun setUsageInsightsEnabled(context: Context, enabled: Boolean) {
-    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(USAGE_INSIGHTS_ENABLED, enabled).apply()
-    if (!enabled) queue(context).deleteEvents(USAGE_INSIGHT_EVENTS)
+    synchronized(lock) {
+      privacyEpoch.incrementAndGet()
+      context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        .putBoolean(USAGE_INSIGHTS_ENABLED, enabled).putInt(CONSENT_VERSION, 1).apply()
+      // Serialize withdrawal with delivery and reject observations prepared before the change.
+      if (!enabled) queue(context).clear()
+    }
+    record(context, "consent_changed", JSONObject().put("purpose", "behavioral").put("allowed", enabled).put("version", 1))
   }
 
   fun isUsageInsightsEnabled(context: Context): Boolean =
-    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(USAGE_INSIGHTS_ENABLED, true)
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(USAGE_INSIGHTS_ENABLED, false) && context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(CONSENT_VERSION, 0) == 1
 
   fun configure(context: Context, revision: String, sampleRate: Double, batchSize: Int) {
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -82,6 +90,7 @@ object Telemetry {
 
   fun record(context: Context, type: String, properties: JSONObject = JSONObject()) {
     val appContext = context.applicationContext
+    val epoch = privacyEpoch.get()
     if (!isEnabled(appContext) || deletionInProgress) return
     val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     val sampleRate = prefs.getFloat(SAMPLE_RATE, 1f)
@@ -89,7 +98,11 @@ object Telemetry {
     if (sampleBucket >= sampleRate) return
     val eventName = V1_TO_V2[type] ?: type.take(80)
     if (eventName == "session_started") sessionId = UUID.randomUUID().toString()
+    if (eventName in setOf("search_performed", "site_visited", "web_playback_summary", "native_playback_summary") && (!isUsageInsightsEnabled(appContext) || properties.optBoolean("privateSession", false))) return
     val safeProperties = sanitize(eventName, properties)
+    if (!isUsageInsightsEnabled(appContext) || properties.optBoolean("privateSession", false)) {
+      listOf("sourceDomain", "pageUrl", "sourceUrl", "siteHost", "term").forEach(safeProperties::remove)
+    }
     val flowId = properties.optString("flowId").takeIf { UUID_PATTERN.matches(it) }
     val event = JSONObject().apply {
       put("schemaVersion", 2)
@@ -101,14 +114,17 @@ object Telemetry {
       put("sequence", nextSequence(appContext))
       put("timestamp", System.currentTimeMillis())
       put("appVersion", appVersion(appContext))
-      put("detectorVersion", "2.0")
+      put("detectorVersion", "3.0")
       put("configVersion", prefs.getString(CONFIG_REVISION, "bundled-safe-defaults-v1"))
       put("androidApi", Build.VERSION.SDK_INT)
       put("locale", Locale.getDefault().toLanguageTag())
       put("timeZone", TimeZone.getDefault().id)
       put("properties", safeProperties)
     }
-    synchronized(lock) { queue(appContext).enqueue(eventName, event.toString(), MAX_QUEUE) }
+    synchronized(lock) {
+      if (!isEnabled(appContext) || deletionInProgress || privacyEpoch.get() != epoch) return
+      queue(appContext).enqueue(eventName, event.toString(), MAX_QUEUE)
+    }
     executor.execute { flush(appContext) }
   }
 
@@ -117,14 +133,14 @@ object Telemetry {
     record(context, type, properties)
   }
 
-  fun flush(context: Context) {
-    if (!isEnabled(context)) return
+  fun flush(context: Context) = synchronized(lock) {
+    if (!isEnabled(context) || deletionInProgress) return
     val rows = synchronized(lock) {
       val batchSize = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(BATCH_SIZE_SETTING, DEFAULT_BATCH_SIZE).coerceIn(1, 50)
       queue(context).ready(batchSize)
     }
     if (rows.isEmpty()) return
-    val response = runCatching { sendBatch(rows) }.getOrNull()
+    val response = runCatching { sendBatch(context, rows) }.getOrNull()
     synchronized(lock) {
       if (response == null) {
         queue(context).retry(rows.map { it.id })
@@ -144,6 +160,7 @@ object Telemetry {
 
   fun deleteServerAnalytics(context: Context): Boolean {
     val appContext = context.applicationContext
+    privacyEpoch.incrementAndGet()
     deletionInProgress = true
     return try {
       executor.submit<Boolean> { deleteServerAnalyticsNow(appContext) }.get()
@@ -154,6 +171,7 @@ object Telemetry {
 
   private fun deleteServerAnalyticsNow(appContext: Context): Boolean {
     val oldId = installId(appContext)
+    synchronized(lock) {queue(appContext).clear()}
     val connection = URL(DELETE_URL).openConnection() as HttpURLConnection
     val success = try {
       connection.requestMethod = "POST"
@@ -161,6 +179,7 @@ object Telemetry {
       connection.readTimeout = 8_000
       connection.doOutput = true
       connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+      connection.setRequestProperty("X-Installation-Proof", proof(appContext))
       connection.outputStream.use { it.write(JSONObject().put("installId", oldId).toString().toByteArray()) }
       connection.responseCode in 200..299
     } finally {
@@ -169,13 +188,14 @@ object Telemetry {
     if (success) {
       queue(appContext).clear()
       appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-        .putString(INSTALL_ID, UUID.randomUUID().toString()).putLong(SEQUENCE, 0).apply()
+        .remove(INSTALL_ID).remove(INSTALL_TOKEN).putLong(SEQUENCE, 0).apply()
+      installId(appContext)
       sequence.set(0)
     }
     return success
   }
 
-  private fun sendBatch(rows: List<QueueRow>): JSONObject {
+  private fun sendBatch(context: Context, rows: List<QueueRow>): JSONObject {
     val events = JSONArray()
     rows.forEach { events.put(JSONObject(it.body)) }
     val raw = JSONObject().put("events", events).toString().toByteArray(Charsets.UTF_8)
@@ -192,6 +212,7 @@ object Telemetry {
       connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
       connection.setRequestProperty("Content-Encoding", "gzip")
       connection.setRequestProperty("Accept", "application/json")
+      connection.setRequestProperty("X-Installation-Proof", proof(context))
       connection.outputStream.use { it.write(compressed) }
       if (connection.responseCode !in 200..299) error("Analytics endpoint returned ${connection.responseCode}")
       JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
@@ -220,9 +241,39 @@ object Telemetry {
     return result
   }
 
-  private fun installId(context: Context): String {
+  private fun proof(context: Context): String {installId(context); return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(INSTALL_TOKEN, "")!!}
+
+  private fun installId(context: Context): String = synchronized(lock) {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    return prefs.getString(INSTALL_ID, null) ?: UUID.randomUUID().toString().also { prefs.edit().putString(INSTALL_ID, it).apply() }
+    if (prefs.contains(INSTALL_TOKEN)) return prefs.getString(INSTALL_ID, "")!!
+    // A public legacy reference cannot establish possession. Rotate for provable future requests.
+    val old = prefs.getString(INSTALL_ID, null)
+    val tokenBytes = ByteArray(32).also {java.security.SecureRandom().nextBytes(it)}
+    val token = tokenBytes.joinToString("") {"%02x".format(it)}
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8)).copyOf(16)
+    digest[6] = ((digest[6].toInt() and 15) or 64).toByte()
+    digest[8] = ((digest[8].toInt() and 63) or 128).toByte()
+    val buffer = java.nio.ByteBuffer.wrap(digest)
+    val id = UUID(buffer.long, buffer.long).toString()
+    val edit = prefs.edit().putString(INSTALL_TOKEN, token).putString(INSTALL_ID, id).putLong(SEQUENCE, 0)
+    if (old != null) edit.putString("legacy_reference", old)
+    edit.apply(); sequence.set(0); queue(context).clear()
+    id
+  }
+
+  fun requestData(context: Context, purpose: String): JSONObject {
+    require(purpose == "access" || purpose == "delete")
+    val reference = installId(context)
+    val connection = URL("$BASE_URL/v2/privacy/request").openConnection() as HttpURLConnection
+    try {
+      connection.requestMethod = "POST"; connection.connectTimeout = 8000; connection.readTimeout = 8000; connection.doOutput = true
+      connection.setRequestProperty("Content-Type", "application/json")
+      connection.setRequestProperty("X-Installation-Proof", proof(context))
+      connection.outputStream.use {it.write(JSONObject().put("installId", reference).put("purpose", purpose).toString().toByteArray())}
+      if (connection.responseCode !in 200..299) error("Data request unavailable. Please try again online.")
+      return JSONObject(connection.inputStream.bufferedReader().use {it.readText()}).put("reference", reference)
+        .put("legacyReference", context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("legacy_reference", null))
+    } finally {connection.disconnect()}
   }
 
   private fun nextSequence(context: Context): Long {
@@ -243,6 +294,7 @@ object Telemetry {
   private val V1_TO_V2 = mapOf("download_started" to "download_queued")
   private val DOWNLOAD_PROPERTIES = setOf("sourceDomain", "mediaType", "protocol", "stage", "bytes", "durationMs", "elapsedMs", "throughputBps", "failureCode")
   private val ALLOWED_PROPERTIES = mapOf(
+    "consent_changed" to setOf("purpose", "allowed", "version"),
     "session_started" to setOf("entryPoint"),
     "session_ended" to setOf("durationMs", "exitReason"),
     "screen_engagement" to setOf("screen", "durationMs"),
@@ -262,7 +314,7 @@ object Telemetry {
     "download_first_byte" to DOWNLOAD_PROPERTIES,
     "ad_request" to setOf("format", "placement"), "ad_load" to setOf("format", "placement", "latencyMs"),
     "ad_failure" to setOf("format", "placement", "errorCode"), "ad_impression" to setOf("format", "placement"),
-    "ad_paid" to setOf("format", "placement", "currency", "micros"),
+    "ad_paid" to setOf("format", "placement", "currency", "micros", "precision", "cohort"),
   )
 }
 

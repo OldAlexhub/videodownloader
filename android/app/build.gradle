@@ -88,7 +88,8 @@ android {
         applicationId "com.oldalexhub.videodownloader"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        versionCode 10
         versionName "2.0.0"
         manifestPlaceholders = [
             adMobAppId: "ca-app-pub-7831002909037560~8100766073",
@@ -135,6 +136,9 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.4.0")
+    androidTestImplementation("junit:junit:4.13.2")
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
     implementation("androidx.work:work-runtime-ktx:2.12.0")
@@ -154,3 +158,13 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+// Instrumentation exercises the same detector source shipped by Metro.
+tasks.register("generateDetectorFixture", Exec) {
+    workingDir rootProject.projectDir.parentFile
+    commandLine "node", "scripts/prepare-android-qa.cjs"
+    inputs.files("../../src/utils/browser.ts", "../../src/utils/adDetection.ts")
+    outputs.dir(layout.buildDirectory.dir("generated/qaAssets"))
+}
+android.sourceSets.androidTest.assets.srcDir(layout.buildDirectory.dir("generated/qaAssets").get().asFile)
+tasks.matching { it.name == "preDebugAndroidTestBuild" }.configureEach { dependsOn("generateDetectorFixture") }

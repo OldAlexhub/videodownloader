@@ -50,7 +50,10 @@ export function inferMediaFromUrl(
   const extensionMatch = clean.match(/\.([a-z0-9]{2,5})$/i);
   const extension = extensionMatch?.[1]?.toLowerCase() || '';
   const contentType = (headers['content-type'] || '').split(';')[0].toLowerCase();
-  const manifest = extension === 'm3u8' || extension === 'mpd';
+  if (['ts','m4s','cmfv','cmfa'].includes(extension)) return null;
+  const hls = extension === 'm3u8' || /mpegurl/i.test(contentType);
+  const dash = extension === 'mpd' || /dash\+xml/i.test(contentType);
+  const manifest = hls || dash;
   const videoExtensions = ['mp4', 'm4v', 'webm', 'mov'];
   const audioExtensions = ['mp3', 'm4a', 'aac', 'ogg', 'wav', 'flac'];
   const imageExtensions = ['jpg', 'jpeg', 'png', 'webp'];
@@ -76,9 +79,9 @@ export function inferMediaFromUrl(
   const resolutionMatch = lowerUrl.match(/(?:^|[^\d])(2160|1440|1080|720|480|360|240)p?(?:[^\d]|$)/);
   const height = resolutionMatch ? Number(resolutionMatch[1]) : undefined;
   const mimeType = contentType ||
-    (manifest ? (extension === 'm3u8' ? 'application/vnd.apple.mpegurl' : 'application/dash+xml') :
+    (manifest ? (hls ? 'application/vnd.apple.mpegurl' : 'application/dash+xml') :
       `${mediaType}/${extension === 'm4a' ? 'mp4' : extension || (mediaType === 'image' ? 'jpeg' : 'mp4')}`);
-  const groupKey = `${new URL(pageUrl || url).hostname}|${title.trim().toLowerCase() || 'media'}|${mediaType}`;
+  const groupKey = `${pageUrl}|${mediaType}|${url}`;
   return {
     id: `${url}|${height || 0}`,
     groupKey,
@@ -86,9 +89,9 @@ export function inferMediaFromUrl(
     pageUrl,
     title: title || 'Detected media',
     mimeType,
-    extension: manifest ? extension : extension || (mediaType === 'video' ? 'mp4' : mediaType === 'audio' ? 'mp3' : 'jpg'),
+    extension: manifest ? (hls ? 'm3u8' : 'mpd') : extension || (mediaType === 'video' ? 'mp4' : mediaType === 'audio' ? 'mp3' : 'jpg'),
     mediaType,
-    protocol: extension === 'm3u8' ? 'hls' : extension === 'mpd' ? 'dash' : 'progressive',
+    protocol: hls ? 'hls' : dash ? 'dash' : 'progressive',
     container: extension ? extension.toUpperCase() : undefined,
     audioMode: mediaType === 'audio' ? 'muxed' : mediaType === 'video' ? 'unknown' : 'none',
     qualityLabel: height ? `${height}p` : manifest ? 'Adaptive stream' : mediaType === 'audio' ? 'Audio' : 'Source',
@@ -106,7 +109,14 @@ export const WEBSITE_AD_BLOCKER_SCRIPT = `
   if (window.__VDMS_WEBSITE_AD_BLOCKER__) return true;
   window.__VDMS_WEBSITE_AD_BLOCKER__ = true;
 
-  window.open = function () { return null; };
+  const originalOpen = window.open;
+  let lastGesture = 0;
+  document.addEventListener('click', event => {if (event.isTrusted) lastGesture = Date.now();}, true);
+  window.open = function (url) {
+    const activated = navigator.userActivation ? navigator.userActivation.isActive : Date.now() - lastGesture < 750;
+    if (!activated) return null;
+    return originalOpen.apply(this, arguments);
+  };
 
   const adSelectors = [
     'iframe[src*="doubleclick.net"]',
@@ -115,10 +125,7 @@ export const WEBSITE_AD_BLOCKER_SCRIPT = `
     'ins.adsbygoogle',
     '[id^="google_ads_"]',
     '[class*="adsbygoogle"]',
-    '[class*="advertisement"]',
-    '[id*="advertisement"]',
-    '[class*="ad-slot"]',
-    '[id*="ad-slot"]',
+    '.advertisement', '.ad-slot', '[data-ad-slot]',
     '[aria-label="Advertisement"]',
     '[aria-label="advertisement"]',
     '[aria-label="Sponsored"]',
@@ -127,7 +134,7 @@ export const WEBSITE_AD_BLOCKER_SCRIPT = `
     '[id*="ad-overlay"]'
   ].join(',');
   const removeCommonAdSlots = () => {
-    document.querySelectorAll(adSelectors).forEach(element => element.remove());
+    document.querySelectorAll(adSelectors).forEach(element => {if (!element.querySelector('video,audio')) element.style.setProperty('display', 'none', 'important');});
   };
   removeCommonAdSlots();
   new MutationObserver(removeCommonAdSlots).observe(document.documentElement || document, {childList:true, subtree:true});
@@ -140,6 +147,12 @@ export const MEDIA_DETECTOR_SCRIPT = `
   if (window.__VDMS_INSTALLED__) return true;
   window.__VDMS_INSTALLED__ = true;
   const sent = new Map();
+  const documentToken = ('doc-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+  const documentTime = performance.timeOrigin || Date.now();
+  const frameId = window === window.top ? 'main' : ('frame-' + Math.random().toString(36).slice(2));
+  const post = payload => window.ReactNativeWebView.postMessage(JSON.stringify({...payload, documentToken, documentTime, frameId, pageUrl: document.baseURI}));
+  const players = new WeakMap();
+  post({type:'documentStarted'});
   const adHosts = ${JSON.stringify(AD_HOSTS)};
   const adPath = new RegExp(${JSON.stringify(AD_PATH.source)}, 'i');
   const adQueryKeys = ${JSON.stringify(AD_QUERY_KEYS)};
@@ -156,25 +169,27 @@ export const MEDIA_DETECTOR_SCRIPT = `
   const rejectAd = url => {
     if (!url || !/^https?:/i.test(url)) return;
     sent.delete(url);
-    window.ReactNativeWebView.postMessage(JSON.stringify({type:'mediaRejected', url:url}));
+    post({type:'mediaRejected', url:url});
   };
   const elementIds = new WeakMap();
   let elementSequence = 0;
   if (navigator.requestMediaKeySystemAccess) {
     const originalMediaKeys = navigator.requestMediaKeySystemAccess.bind(navigator);
     navigator.requestMediaKeySystemAccess = function () {
-      window.ReactNativeWebView.postMessage(JSON.stringify({type:'protected'}));
+      post({type:'protected'});
       return originalMediaKeys.apply(navigator, arguments);
     };
   }
   const emit = (url, meta) => {
     if (!url || !/^https?:/i.test(url)) return;
-    if (isAdUrl(url) || (meta && ['fetch', 'xhr'].includes(meta.source) && adPlaying())) { rejectAd(url); return; }
+    if (isAdUrl(url)) { rejectAd(url); return; }
+    if (meta && ['fetch', 'xhr', 'resource'].includes(meta.source) && adPlaying()) return;
+    if (/\\.(?:ts|m4s|cmfv|cmfa)(?:[?#]|$)/i.test(url)) return;
     const details = meta || {};
     const signature = JSON.stringify([details.elementId || '', details.type || '', details.width || 0, details.height || 0, Math.round(details.duration || 0), details.active || false, details.poster || '']);
     if (sent.get(url) === signature) return;
     sent.set(url, signature);
-    window.ReactNativeWebView.postMessage(JSON.stringify({type:'media', url:url, meta:meta || {}}));
+    post({type:'media', url:url, meta:meta || {}});
   };
   let holdTimer = null;
   let holdStart = null;
@@ -205,7 +220,7 @@ export const MEDIA_DETECTOR_SCRIPT = `
   const showContext = (details) => {
     if (!details) return;
     lastContextAt = Date.now();
-    window.ReactNativeWebView.postMessage(JSON.stringify(details));
+    post(details);
   };
   document.addEventListener('touchstart', (event) => {
     if (event.touches.length !== 1) return;
@@ -242,7 +257,11 @@ export const MEDIA_DETECTOR_SCRIPT = `
   }, true);
   const inspect = () => {
     document.querySelectorAll('video,audio').forEach((node) => {
-      if (isAdElement(node)) {
+      const sourceUrl = node.currentSrc || node.src || '';
+      const player = players.get(node) || {url:'', generation:0, ad:false};
+      const advertising = isAdElement(node);
+      if (player.url !== sourceUrl || player.ad !== advertising) {player.generation++; player.url = sourceUrl; player.ad = advertising; players.set(node, player);}
+      if (advertising) {
         rejectAd(node.currentSrc || node.src);
         node.querySelectorAll('source').forEach(source => rejectAd(source.src));
         return;
@@ -250,13 +269,14 @@ export const MEDIA_DETECTOR_SCRIPT = `
       if (!elementIds.has(node)) elementIds.set(node, 'media-' + (++elementSequence));
       const rect = node.getBoundingClientRect();
       const meta = {
-        elementId: elementIds.get(node),
+        elementId: frameId + ':' + elementIds.get(node),
+        generation: player.generation,
         source: 'element',
         tag: node.tagName.toLowerCase(),
         title: node.getAttribute('title') || document.title,
         poster: node.getAttribute('poster') || '',
-        width: node.videoWidth || Math.round(rect.width),
-        height: node.videoHeight || Math.round(rect.height),
+        width: node.videoWidth || 0,
+        height: node.videoHeight || 0,
         duration: Number.isFinite(node.duration) ? node.duration : 0,
         active: !node.paused,
         prominent: rect.width * rect.height > ((window.__VDMS_CONFIG__ && window.__VDMS_CONFIG__.minimumImagePixels) || 120000)
@@ -265,6 +285,13 @@ export const MEDIA_DETECTOR_SCRIPT = `
       node.querySelectorAll('source').forEach((source) => emit(source.src, {...meta, source:'source', type:source.type || ''}));
     });
   };
+  const observeResource = entry => {
+    if (/\\.(?:mp4|webm|m4v|m3u8|mpd|mp3|m4a)(?:[?#]|$)/i.test(entry.name || '')) emit(entry.name, {source:'resource'});
+  };
+  if (performance.getEntriesByType) performance.getEntriesByType('resource').forEach(observeResource);
+  if (typeof PerformanceObserver !== 'undefined') {
+    try {new PerformanceObserver(list => list.getEntries().forEach(observeResource)).observe({type:'resource', buffered:true});} catch (_) {}
+  }
   const originalFetch = window.fetch;
   if (originalFetch) {
     window.fetch = function () {
@@ -342,8 +369,9 @@ export const MEDIA_DETECTOR_SCRIPT = `
     originalInspect();
     document.querySelectorAll('video,audio').forEach(instrumentPlayback);
   };
+  window.addEventListener('vdms:rescan', () => {sent.clear(); inspectAndInstrument();});
   window.addEventListener('pagehide', () => document.querySelectorAll('video,audio').forEach(node => emitPlayback(node, 'navigation')));
-  new MutationObserver(inspectAndInstrument).observe(document.documentElement || document, {childList:true, subtree:true, attributes:true, attributeFilter:['src', 'class', 'data-ad-slot', 'aria-label']});
+  new MutationObserver(() => {if (typeof requestAnimationFrame === 'function') {if (!window.__VDMS_SCAN_PENDING__) {window.__VDMS_SCAN_PENDING__ = true; requestAnimationFrame(() => {window.__VDMS_SCAN_PENDING__ = false; inspectAndInstrument();});}} else inspectAndInstrument();}).observe(document.documentElement || document, {childList:true, subtree:true, attributes:true, attributeFilter:['src', 'class', 'data-ad-slot', 'aria-label']});
   document.addEventListener('loadedmetadata', inspectAndInstrument, true);
   setInterval(inspectAndInstrument, 2500);
   inspectAndInstrument();

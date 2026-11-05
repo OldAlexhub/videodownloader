@@ -1,6 +1,6 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {Alert, Modal, Pressable, StyleSheet, Text, View} from 'react-native';
-import {CopyCheck, Database, FileCheck2, FileVideo, Gauge, HardDrive, Search, Sparkles, Trash2, X} from 'lucide-react-native';
+import {CopyCheck, Database, FileCheck2, FileVideo, HardDrive, Search, Sparkles, Trash2, X} from 'lucide-react-native';
 import {EmptyState} from '../components/EmptyState';
 import {SafeModalScreen, SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
@@ -12,19 +12,11 @@ import {formatBytes} from '../utils/format';
 interface StorageStats {videos: number; audio: number; images: number; temporary: number}
 
 export function SmartToolsScreen() {
-  const {downloads, settings, updateSettings, detectedMedia, refreshDownloads} = useApp();
+  const {downloads, settings, updateSettings, refreshDownloads} = useApp();
   const [storage, setStorage] = useState<StorageStats>({videos: 0, audio: 0, images: 0, temporary: 0});
   const [duplicatesVisible, setDuplicatesVisible] = useState(false);
   const completed = downloads.filter(item => item.status === 'completed');
   const duplicates = useMemo(() => findDuplicates(completed), [completed]);
-  const recommendation = useMemo(() => {
-    const video = detectedMedia.filter(item => item.mediaType === 'video' && !item.isProtected);
-    const balanced = video.find(item => item.height === 720) || [...video].sort((a, b) => Math.abs((a.height || 720) - 720) - Math.abs((b.height || 720) - 720))[0];
-    const best = [...video].sort((a, b) => (b.height || 0) - (a.height || 0))[0];
-    if (!balanced) return undefined;
-    const saving = best?.estimatedBytes && balanced.estimatedBytes ? Math.max(0, Math.round((1 - balanced.estimatedBytes / best.estimatedBytes) * 100)) : undefined;
-    return {item: balanced, reason: saving && saving > 0 ? `Good quality with about ${saving}% less storage than ${best.qualityLabel}.` : 'A practical balance of source quality and storage use.'};
-  }, [detectedMedia]);
 
   const refreshStorage = () => downloadManager.storageStats().then(setStorage).catch(() => undefined);
   useEffect(() => { refreshStorage(); }, [downloads]);
@@ -43,11 +35,6 @@ export function SmartToolsScreen() {
           <View style={styles.featureIcon}><Sparkles color={colors.blue700} size={27} /></View>
           <View style={styles.featureCopy}><Text style={styles.featureTitle}>Smart File Naming</Text><Text style={styles.featureBody}>Uses the page title and actual quality, then removes unsafe filename characters.</Text></View>
           <Pressable onPress={() => updateSettings({smartFilename: !settings.smartFilename})} style={[styles.statePill, settings.smartFilename && styles.statePillOn]}><Text style={[styles.stateText, settings.smartFilename && styles.stateTextOn]}>{settings.smartFilename ? 'On' : 'Off'}</Text></Pressable>
-        </View>
-
-        <View style={styles.featureCard}>
-          <View style={styles.featureIcon}><Gauge color={colors.blue700} size={27} /></View>
-          <View style={styles.featureCopy}><Text style={styles.featureTitle}>Quality Recommendation</Text><Text style={styles.featureBody}>{recommendation ? `Recommended: ${recommendation.item.qualityLabel}. ${recommendation.reason}` : 'Open a supported media page to compare the qualities that page actually exposes.'}</Text></View>
         </View>
 
         <Text style={styles.sectionTitle}>Storage overview</Text>

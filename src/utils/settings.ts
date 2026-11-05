@@ -12,5 +12,9 @@ export function migrateSettings(value: unknown): AppSettings {
   migrated.preferredQuality = preferred === 'best' || preferred === 'balanced' || preferred === 'smallest'
     ? preferred
     : legacy === 'best' || legacy === 'smallest' ? legacy : 'balanced';
+  // A legacy default-on value is not affirmative consent. Preserve explicit refusals.
+  migrated.behavioralConsent = raw.behavioralConsent === 'granted' || raw.behavioralConsent === 'denied'
+    ? raw.behavioralConsent : raw.usageInsightsEnabled === false || raw.analyticsEnabled === false ? 'denied' : 'pending';
+  migrated.usageInsightsEnabled = migrated.behavioralConsent === 'granted';
   return migrated;
 }

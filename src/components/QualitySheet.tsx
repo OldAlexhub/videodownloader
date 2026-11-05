@@ -4,7 +4,7 @@ import {Check, CheckSquare2, Download, FileAudio, FileVideo, Folder, ImageIcon, 
 import type {AppSettings, DetectedAsset, DownloadSelection, MediaVariant} from '../types';
 import {colors, radius, spacing} from '../theme';
 import {formatBytes} from '../utils/format';
-import {assetCountLabel, chooseVariant, variantUsable} from '../utils/media';
+import {assetCountLabel, chooseVariant, variantUsable, primaryVariant} from '../utils/media';
 import {remoteConfig} from '../native/RemoteConfig';
 import {SafeBottomSheet} from './ScreenContainer';
 
@@ -16,6 +16,8 @@ interface Props {
   onChooseDestination: () => Promise<void>;
   onClose: () => void;
   onIncorrect: (asset: DetectedAsset) => void;
+  onPreview?: (variant: MediaVariant) => void;
+  onRetry?: (asset: DetectedAsset) => void;
   onVariantSelected?: (variant: MediaVariant) => void;
   onDownload: (items: DownloadSelection[]) => Promise<unknown>;
 }
@@ -41,7 +43,7 @@ function describeAudio(item: MediaVariant): string {
 }
 
 function variantMeta(item: MediaVariant): string {
-  const values = [item.container || 'Container unknown', item.detectionSource ? `Found by ${item.detectionSource}` : 'Source unknown', describeAudio(item)];
+  const values = [item.container || item.extension.toUpperCase(), describeAudio(item)];
   if (item.videoCodec) values.push(item.videoCodec);
   if (item.bitrate) values.push(`${Math.round(item.bitrate / 1000)} kbps`);
   return values.join(' · ');
@@ -56,11 +58,17 @@ function recommended(items: MediaVariant[], preference: AppSettings['preferredQu
   return chooseVariant(items.filter(downloadable), preference, config.recommendation.balancedHeight, config.recommendation.requireAudio);
 }
 
-export function QualitySheet({visible, assets, preferredQuality, destinationName, onChooseDestination, onClose, onIncorrect, onVariantSelected, onDownload}: Props) {
+export function QualitySheet({visible, assets, preferredQuality, destinationName, onChooseDestination, onClose, onIncorrect, onPreview, onRetry, onVariantSelected, onDownload}: Props) {
   const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set());
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({});
   const [filenames, setFilenames] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [additional, setAdditional] = useState(false);
+  const [failure, setFailure] = useState('');
+  const primaryAssets = assets.filter(asset => asset.variants.some(primaryVariant));
+  const additionalAssets = assets.filter(asset => !asset.variants.some(primaryVariant));
+  const displayedAssets = additional ? [...primaryAssets, ...additionalAssets] : primaryAssets;
   const wasVisible = useRef(false);
 
   useEffect(() => {
@@ -68,13 +76,13 @@ export function QualitySheet({visible, assets, preferredQuality, destinationName
       wasVisible.current = false;
       return;
     }
-    const primary = assets.find(asset => asset.variants.some(downloadable));
+    const primary = assets.find(asset => asset.variants.some(item => primaryVariant(item) && downloadable(item)));
     if (!wasVisible.current) {
       wasVisible.current = true;
       setSelectedAssets(new Set(primary ? [primary.id] : []));
       setSelectedVariants(Object.fromEntries(assets.map(asset => [asset.id, recommended(asset.variants, preferredQuality)?.id || ''])));
       setFilenames(Object.fromEntries(assets.map(asset => [asset.id, filenameBase(asset)])));
-      setBusy(false);
+      setBusy(false); setAdditional(false); setExpanded(new Set()); setFailure('');
       return;
     }
     const currentIds = new Set(assets.map(asset => asset.id));
@@ -116,6 +124,8 @@ export function QualitySheet({visible, assets, preferredQuality, destinationName
     try {
       await onDownload(selections);
       onClose();
+    } catch {
+      setFailure('The download could not be started. Your selection has been kept. Please try again.');
     } finally {
       setBusy(false);
     }
@@ -129,8 +139,8 @@ export function QualitySheet({visible, assets, preferredQuality, destinationName
           <View style={styles.handle} />
           <View style={styles.header}>
             <View style={styles.headerCopy}>
-              <Text style={styles.title}>Choose what to download</Text>
-              <Text style={styles.subtitle}>{assetCountLabel(assets)} · {assets.reduce((total, asset) => total + asset.variants.filter(downloadable).length, 0)} quality options</Text>
+              <Text style={styles.title}>Save your video</Text>
+              <Text style={styles.subtitle}>{assetCountLabel(primaryAssets)} ready · {assets.reduce((total, asset) => total + asset.variants.filter(downloadable).length, 0)} quality options</Text>
             </View>
             <Pressable accessibilityLabel="Close" onPress={onClose} style={styles.close}><X color={colors.ink} size={22} /></Pressable>
           </View>
@@ -140,7 +150,9 @@ export function QualitySheet({visible, assets, preferredQuality, destinationName
             <Preset label="Smallest" onPress={() => choosePreset('smallest')} />
           </View>
           <ScrollView contentContainerStyle={styles.assets} keyboardShouldPersistTaps="handled" style={styles.optionScroll}>
-            {assets.map(asset => {
+            {!primaryAssets.length ? <Text style={styles.meta}>No verified content yet. Start the video on the page, then check again. Additional results may need verification.</Text> : null}
+            {additionalAssets.length ? <Pressable accessibilityRole="button" onPress={() => setAdditional(value => !value)} style={styles.destination}><Text style={styles.destinationText}>{additional ? 'Hide additional results' : `Additional results (${additionalAssets.length})`}</Text></Pressable> : null}
+            {displayedAssets.map(asset => {
               const assetSelected = selectedAssets.has(asset.id);
               const TypeIcon = asset.mediaType === 'video' ? FileVideo : asset.mediaType === 'audio' ? FileAudio : ImageIcon;
               return (
@@ -149,11 +161,17 @@ export function QualitySheet({visible, assets, preferredQuality, destinationName
                     {asset.thumbnailUrl ? <Image source={{uri: asset.thumbnailUrl}} style={styles.thumbnail} /> : <View style={styles.thumbnailFallback}><TypeIcon color={colors.blue600} size={27} /></View>}
                     <View style={styles.assetCopy}>
                       <Text numberOfLines={2} style={styles.assetTitle}>{asset.title}</Text>
-                      <Text style={styles.assetSubtitle}>{asset.variants.length} {asset.variants.length === 1 ? 'option' : 'options'}</Text>
+                      <Text style={styles.assetSubtitle}>{asset.variants.some(primaryVariant) ? 'Verified content' : 'Additional result ? check before saving'}{asset.durationMs ? ` ? ${Math.round(asset.durationMs / 1000)} sec` : ''}</Text>
                     </View>
                     {assetSelected ? <CheckSquare2 color={colors.blue700} size={24} /> : <Square color={colors.muted} size={24} />}
                   </Pressable>
-                  {assetSelected ? (
+                  <View style={styles.presets}>
+                    {onPreview ? <Pressable style={styles.preset} onPress={() => onPreview(asset.variants.find(variantUsable) || asset.variants[0])}><Text style={styles.presetText}>Preview</Text></Pressable> : null}
+                    {onRetry && !asset.variants.some(variantUsable) ? <Pressable style={styles.preset} onPress={() => onRetry(asset)}><Text style={styles.presetText}>Verify again</Text></Pressable> : null}
+                    <Pressable style={styles.preset} onPress={() => onIncorrect(asset)}><Text style={styles.presetText}>Wrong video / ad</Text></Pressable>
+                  </View>
+                  {assetSelected ? <Pressable style={styles.destination} accessibilityRole="button" accessibilityState={{expanded: expanded.has(asset.id)}} onPress={() => setExpanded(current => {const next = new Set(current); if (next.has(asset.id)) next.delete(asset.id); else next.add(asset.id); return next;})}><Text style={styles.destinationText}>{asset.variants.find(item => item.id === selectedVariants[asset.id])?.qualityLabel || 'Source'} ? Quality & filename</Text></Pressable> : null}
+                  {assetSelected && expanded.has(asset.id) ? (
                     <>
                       <TextInput
                         accessibilityLabel={`Filename for ${asset.title}`}
@@ -195,6 +213,7 @@ export function QualitySheet({visible, assets, preferredQuality, destinationName
             })}
           </ScrollView>
           <Pressable onPress={onChooseDestination} style={styles.destination}><Folder color={colors.blue700} size={18} /><Text numberOfLines={1} style={styles.destinationText}>Save to {destinationName}</Text></Pressable>
+          {failure ? <Text accessibilityRole="alert" style={styles.protected}>{failure}</Text> : null}
           <View style={styles.footer}>
             <Pressable onPress={onClose} style={styles.cancel}><Text style={styles.cancelText}>Cancel</Text></Pressable>
             <Pressable disabled={!selections.length || busy} onPress={submit} style={[styles.download, (!selections.length || busy) && styles.disabled]}>

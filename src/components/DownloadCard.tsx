@@ -25,7 +25,7 @@ export function DownloadCard({item, onPause, onResume, onCancel, onOpen, onMore,
         <View style={styles.icon}><Icon color={colors.blue700} size={24} /></View>
         <View style={styles.copy}>
           <Text numberOfLines={2} style={styles.title}>{item.finalFilename || item.title}</Text>
-          <Text style={styles.meta}>{item.qualityLabel || item.extension.toUpperCase()} · {item.status.replace(/\b\w/g, value => value.toUpperCase())}</Text>
+          <Text style={styles.meta}>{item.qualityLabel || item.extension.toUpperCase()} · {(item.status === 'processing' ? item.processingStage || 'Processing' : item.status).replace(/\b\w/g, value => value.toUpperCase())}</Text>
         </View>
         {active ? (
           <Pressable accessibilityLabel="Cancel download" onPress={onCancel} style={styles.smallAction}><X color={colors.muted} size={20} /></Pressable>
@@ -41,7 +41,7 @@ export function DownloadCard({item, onPause, onResume, onCancel, onOpen, onMore,
             <Text style={styles.transfer}>{formatBytes(item.downloadedBytes)}{item.estimatedBytes > 0 ? ` / ${formatBytes(item.estimatedBytes)}` : ''}</Text>
           </View>
           <View style={styles.bottomRow}>
-            <View><Text style={styles.speed}>{item.status === 'paused' ? 'Paused' : formatSpeed(item.speedBytesPerSecond)}</Text><Text style={styles.eta}>ETA {formatEta(item.etaSeconds)}</Text></View>
+            <View><Text style={styles.speed}>{item.status === 'processing' ? 'Checking and saving your file' : item.status === 'paused' ? 'Paused' : formatSpeed(item.speedBytesPerSecond)}</Text>{item.status === 'downloading' ? <Text style={styles.eta}>ETA {formatEta(item.etaSeconds)}</Text> : null}</View>
             {item.status === 'paused' ? (
               <Pressable onPress={onResume} style={styles.primaryAction}><Play color={colors.white} size={17} /><Text style={styles.primaryText}>Resume</Text></Pressable>
             ) : (

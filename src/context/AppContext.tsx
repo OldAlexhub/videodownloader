@@ -22,7 +22,7 @@ import type {
 } from '../types';
 import {DEFAULT_SETTINGS} from '../types';
 import {downloadManager} from '../native/DownloadManager';
-import {groupMedia, upsertVariant} from '../utils/media';
+import {groupMedia, upsertVariant, variantUsable} from '../utils/media';
 import {migrateSettings} from '../utils/settings';
 
 const STORAGE = {
@@ -166,6 +166,8 @@ export function AppProvider({children}: PropsWithChildren) {
       Object.assign(settingsPatchBeforeLoad.current, patch);
     }
     setSettings(next);
+    if (patch.analyticsEnabled !== undefined) await downloadManager.setAnalyticsEnabled(next.analyticsEnabled);
+    if (patch.behavioralConsent !== undefined) await downloadManager.setUsageInsightsEnabled(next.behavioralConsent === 'granted');
     try {
       await AsyncStorage.setItem(STORAGE.settings, JSON.stringify(next));
     } catch (error) {
@@ -221,7 +223,7 @@ export function AppProvider({children}: PropsWithChildren) {
   const clearDetectedMedia = useCallback(() => setDetectedMedia([]), []);
 
   const enqueueSelections = useCallback(async (selections: DownloadSelection[], userAgent?: string, privateMode = false) => {
-    const usable = selections.filter(selection => !selection.variant.isProtected && !['protected', 'unsupported', 'expired'].includes(selection.variant.inspectionState || 'ready'));
+    const usable = selections.filter(selection => variantUsable(selection.variant));
     if (!usable.length) {
       Alert.alert('Nothing to download', 'Choose at least one supported media option.');
       return [];

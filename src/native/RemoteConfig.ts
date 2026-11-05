@@ -8,7 +8,7 @@ export interface RemoteConfig {
   recommendation: {balancedHeight: number; requireAudio: boolean};
   telemetry: {sampleRate: number; batchSize: number};
   experiments: Record<string, boolean | number | string>;
-  killSwitches: {adaptiveDownloads: boolean};
+  killSwitches: {adaptiveDownloads: boolean; interstitials?: boolean; enhancedDetection?: boolean};
   update: {force: boolean; minimumVersionCode: number};
 }
 
@@ -19,7 +19,7 @@ export const SAFE_REMOTE_CONFIG: RemoteConfig = {
   recommendation: {balancedHeight: 720, requireAudio: true},
   telemetry: {sampleRate: 1, batchSize: 25},
   experiments: {},
-  killSwitches: {adaptiveDownloads: false},
+  killSwitches: {adaptiveDownloads: false, interstitials: false, enhancedDetection: false},
   // Turn this on remotely only after the matching Play release is live.
   update: {force: false, minimumVersionCode: 7},
 };
@@ -46,6 +46,7 @@ function valid(value: unknown): value is RemoteConfig {
     && item.telemetry.sampleRate >= 0 && item.telemetry.sampleRate <= 1
     && Number.isInteger(item.telemetry.batchSize)
     && item.telemetry.batchSize >= 1 && item.telemetry.batchSize <= 50
+    && ['interstitials', 'enhancedDetection'].every(key => (item.killSwitches as any)[key] === undefined || typeof (item.killSwitches as any)[key] === 'boolean')
     && typeof item.killSwitches.adaptiveDownloads === 'boolean'
     && typeof item.update.force === 'boolean'
     && Number.isInteger(item.update.minimumVersionCode)
@@ -53,15 +54,21 @@ function valid(value: unknown): value is RemoteConfig {
 }
 
 export const remoteConfig = {
-  current: () => active,
+  current: () => {
+    if (active.expiresAt && Date.parse(active.expiresAt) <= Date.now()) active = SAFE_REMOTE_CONFIG;
+    return active;
+  },
   load: async (): Promise<RemoteConfig> => {
     const stored = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
     let cached: {etag?: string; value?: unknown} = {};
     try { cached = stored ? JSON.parse(stored) : {}; } catch { /* Ignore corrupt cache. */ }
-    if (valid(cached.value)) active = cached.value;
+    const usableCache = valid(cached.value);
+    active = usableCache ? cached.value as RemoteConfig : SAFE_REMOTE_CONFIG;
     await downloadManager.configureTelemetry(active.revision, active.telemetry.sampleRate, active.telemetry.batchSize).catch(() => undefined);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch('https://vd.server.oldalexhub.com/v2/config', {headers: cached.etag ? {'If-None-Match': cached.etag} : {}});
+      const response = await fetch('https://vd.server.oldalexhub.com/v2/config', {signal: controller.signal, headers: usableCache && cached.etag ? {'If-None-Match': cached.etag} : {}});
       if (response.status === 304) {
         return active;
       }
@@ -72,7 +79,7 @@ export const remoteConfig = {
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({etag: response.headers.get('ETag') || undefined, value}));
     } catch {
       // Safe bundled or last-known-valid configuration remains active.
-    }
+    } finally {clearTimeout(timeout);}
     await downloadManager.configureTelemetry(active.revision, active.telemetry.sampleRate, active.telemetry.batchSize).catch(() => undefined);
     return active;
   },

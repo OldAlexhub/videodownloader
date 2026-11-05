@@ -31,6 +31,7 @@ class PlayerActivity : AppCompatActivity() {
   private var bufferCount = 0
   private var summaryFlushed = false
   private var lastPlaybackState = Player.STATE_IDLE
+  private fun privatePlayback(): Boolean = intent.getBooleanExtra("vdPreview", false) || intent.getStringExtra(EXTRA_DOWNLOAD_ID)?.let {DownloadDatabase.get(this).get(it)?.privateDownload} == true
   private var mediaType = "unknown"
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,7 +60,7 @@ class PlayerActivity : AppCompatActivity() {
     playWhenReady = savedInstanceState?.getBoolean(STATE_PLAYING) ?: true
     watchedMs = savedInstanceState?.getLong(STATE_WATCHED) ?: 0L
     mediaType = intent.getStringExtra(EXTRA_MIME).orEmpty().substringBefore('/').ifBlank { "unknown" }
-    Telemetry.record(this, "player_opened", JSONObject().apply { put("mediaType", mediaType) })
+    if (!privatePlayback()) Telemetry.record(this, "player_opened", JSONObject().apply { put("mediaType", mediaType) })
   }
 
   override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -97,7 +98,13 @@ class PlayerActivity : AppCompatActivity() {
   private fun initializePlayer() {
     if (player != null) return
     val uri = intent.getStringExtra(EXTRA_URI) ?: return finish()
+    val headers = buildMap {
+      put("User-Agent", android.webkit.WebSettings.getDefaultUserAgent(this@PlayerActivity))
+      intent.getStringExtra("vdReferer")?.let {put("Referer", it)}
+      android.webkit.CookieManager.getInstance().getCookie(uri)?.let {put("Cookie", it)}
+    }
     player = ExoPlayer.Builder(this)
+      .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this).setDataSourceFactory(androidx.media3.datasource.DefaultDataSource.Factory(this, androidx.media3.datasource.DefaultHttpDataSource.Factory().setDefaultRequestProperties(headers))))
       .setWakeMode(C.WAKE_MODE_LOCAL)
       .setHandleAudioBecomingNoisy(true)
       .build().also { exoPlayer ->
@@ -165,7 +172,7 @@ class PlayerActivity : AppCompatActivity() {
     accrueWatched()
     val current = player?.currentPosition ?: position
     val duration = player?.duration?.takeIf { it > 0 } ?: 0L
-    Telemetry.record(this, "native_playback_summary", JSONObject().apply {
+    if (!privatePlayback()) Telemetry.record(this, "native_playback_summary", JSONObject().apply {
       put("mediaType", mediaType)
       put("durationMs", duration)
       put("activeWatchedMs", watchedMs)

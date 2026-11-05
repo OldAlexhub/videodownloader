@@ -1,3 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {COMPATIBILITY_KEY} from '../browser/session';
+import {publishAdsConsent} from '../ads/AdConsentContext';
 import React, {useEffect, useState} from 'react';
 import {ActivityIndicator, Alert, AppState, Linking, Image, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View} from 'react-native';
 import {AdsConsent} from 'react-native-google-mobile-ads';
@@ -6,7 +9,7 @@ import {ChevronRight, Cookie, Database, Download, Folder, Globe2, Info, LockKeyh
 import {SafeBottomSheet, SafeModalScreen, SafeScrollView} from '../components/ScreenContainer';
 import {useApp} from '../context/AppContext';
 import {downloadManager} from '../native/DownloadManager';
-import {deletionRequestUrl} from '../utils/sourceLink';
+import {dataRequestUrl} from '../utils/sourceLink';
 import {DEFAULT_SETTINGS, type AppSettings} from '../types';
 import {colors, radius, spacing} from '../theme';
 
@@ -33,15 +36,21 @@ export function SettingsScreen() {
       Linking.openURL(`https://play.google.com/store/apps/details?id=${encodeURIComponent(packageName)}`).catch(() => Alert.alert('Update browser', 'Open Google Play and update Android System WebView and Google Chrome.'));
     }
   };
-  const requestDeletion = async () => {
-    let reference = '';
+  const requestData = async (purpose: 'access' | 'delete') => {
+    let details = 'Email info@oldalexhub.com. Open this action while online to generate a verified request code.';
     try {
-      reference = await downloadManager.getAnalyticsDeletionReference();
-      await Linking.openURL(deletionRequestUrl(reference));
+      const request = await downloadManager.requestData(purpose);
+      details = `Installation reference: ${request.reference}${request.legacyReference ? `\nPrevious reference (requires separate verification): ${request.legacyReference}` : ''}\nVerified request code: ${request.code}\nExpires: ${request.expiresAt}\nRequest: ${purpose === 'access' ? 'a copy of my data' : 'deletion of my data'}`;
+      await Linking.openURL(dataRequestUrl(purpose, details));
     } catch {
-      Alert.alert('Request data deletion', `Email info@oldalexhub.com to request deletion.${reference ? ` Include this installation reference: ${reference}.` : ''} You can also use Delete server analytics below.`, reference ? [{text: 'Copy reference', onPress: () => Clipboard.setString(reference)}, {text: 'Close', style: 'cancel'}] : [{text: 'Close'}]);
+      Alert.alert(purpose === 'access' ? 'Request my data' : 'Request deletion', details, [{text:'Copy request details', onPress: () => Clipboard.setString(`info@oldalexhub.com\n${details}`)}, {text:'Close', style:'cancel'}]);
     }
   };
+  const chooseInsights = () => Alert.alert('Search, website & playback insights', 'Allow Old Alex Hub to collect submitted search terms, visited domains, playback measurements and sanitized completed-download links for product insights? Private sessions are excluded. Retention is up to 730 days. Withdrawal clears queued behavioral data; all features remain available.', [
+    {text:'Withdraw / decline', onPress: () => updateSettings({behavioralConsent:'denied', usageInsightsEnabled:false, consentUpdatedAt:Date.now()})},
+    {text:'Allow insights', onPress: () => updateSettings({behavioralConsent:'granted', usageInsightsEnabled:true, consentUpdatedAt:Date.now()})},
+    {text:'Cancel', style:'cancel'},
+  ]);
   const [choice, setChoice] = useState<Choice>(null);
   const [privacyVisible, setPrivacyVisible] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -84,12 +93,12 @@ export function SettingsScreen() {
     }},
   ]);
 
-  const deleteServerAnalytics = () => Alert.alert('Delete server analytics?', 'This requests deletion of analytics linked to this installation, then gives this installation a new anonymous identifier.', [
+  const deleteServerAnalytics = () => Alert.alert('Delete server analytics?', 'This requests deletion of analytics linked to this installation, then gives this installation a new installation reference.', [
     {text: 'Cancel', style: 'cancel'},
     {text: 'Delete', style: 'destructive', onPress: async () => {
       try {
         const deleted = await downloadManager.deleteServerAnalytics();
-        Alert.alert(deleted ? 'Analytics deleted' : 'Request unavailable', deleted ? 'Server analytics for the previous anonymous identifier were deleted.' : 'Please update the server or try again later.');
+        Alert.alert(deleted ? 'Analytics deleted' : 'Request unavailable', deleted ? 'Server analytics for the previous installation reference were deleted.' : 'Please update the server or try again later.');
       } catch {
         Alert.alert('Could not delete analytics', 'Please check your connection and try again.');
       }
@@ -115,18 +124,20 @@ export function SettingsScreen() {
           <SettingRow icon={<Globe2 color={colors.blue700} size={20} />} title="Update browser engine" value={browserInfo ? `WebView ${browserInfo.versionName}` : 'Android System WebView'} onPress={updateBrowser} />
           <SettingRow icon={<Search color={colors.blue700} size={20} />} title="Search engine" value={engineLabel(settings.searchEngine)} onPress={() => setChoice({title: 'Search engine', key: 'searchEngine', options: [{label: 'Google', value: 'google'}, {label: 'Bing', value: 'bing'}, {label: 'DuckDuckGo', value: 'duckduckgo'}]})} />
           <ToggleRow icon={<LockKeyhole color={colors.blue700} size={20} />} title="Start privately" description="Do not save history in new browser sessions" value={settings.privateByDefault} onChange={value => updateSettings({privateByDefault: value})} />
-          <ToggleRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Block website ads" description="Block pop-up windows and common ad slots in webpages. App ads are unaffected." value={settings.blockWebsiteAds} onChange={value => updateSettings({blockWebsiteAds: value})} />
+          <ToggleRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Block website ads" description="Block unsolicited popups and known ad slots in webpages. App ads are unaffected." value={settings.blockWebsiteAds} onChange={value => updateSettings({blockWebsiteAds: value})} />
+          <SettingRow icon={<RotateCcw color={colors.blue700} size={20} />} title="Reset site compatibility" onPress={() => Alert.alert('Reset site preferences?', 'Website filtering will use your default setting again. Browser tabs will close.', [{text:'Cancel', style:'cancel'}, {text:'Reset', onPress: async () => {await AsyncStorage.removeItem(COMPATIBILITY_KEY); clearBrowserSession();}}])} />
           <SettingRow icon={<Globe2 color={colors.blue700} size={20} />} title="Clear browser history" onPress={() => Alert.alert('Clear browser history?', 'Saved local browsing history will be removed.', [{text: 'Cancel', style: 'cancel'}, {text: 'Clear', style: 'destructive', onPress: clearHistory}])} />
           <SettingRow icon={<Cookie color={colors.blue700} size={20} />} title="Clear cookies" onPress={() => clearBrowser('cookies')} />
           <SettingRow icon={<Trash2 color={colors.blue700} size={20} />} title="Clear browser cache" onPress={() => clearBrowser('cache')} last />
         </SettingsSection>
 
-        <SettingsSection title="Advertising & Privacy">
+        <SettingsSection title="Data, privacy & advertising">
           <SettingRow icon={<Info color={colors.blue700} size={20} />} title="Ad disclosure" value="Free with ads" onPress={() => Alert.alert('Advertising disclosure', 'The app is free and supported by Google AdMob. Ads never unlock downloads, quality, speed, playback, or tools. Ad requests can process advertising identifiers, approximate location, app interactions, and diagnostics depending on your consent and device settings.')} />
-          <ToggleRow icon={<Database color={colors.blue700} size={20} />} title="Share app data" description="On by default: share performance, playback, ad measurements, and completed-download page and media links. Private download links, media files, cookies, and authorization headers are excluded." value={settings.analyticsEnabled} onChange={async value => {await updateSettings({analyticsEnabled: value}); await downloadManager.setAnalyticsEnabled(value);}} />
-          <ToggleRow icon={<Search color={colors.blue700} size={20} />} title="Search & website insights" description="On by default: include submitted search terms and visited domains in aggregate reports. Requires Share app data; private sessions are excluded." value={settings.usageInsightsEnabled} onChange={async value => {await updateSettings({usageInsightsEnabled: value}); await downloadManager.setUsageInsightsEnabled(value);}} />
-          <SettingRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Privacy choices" onPress={() => AdsConsent.showPrivacyOptionsForm().catch(() => Alert.alert('Privacy choices unavailable', 'A privacy options form is not required or is temporarily unavailable.'))} />
-          <SettingRow icon={<Database color={colors.blue700} size={20} />} title="Request data deletion" value="info@oldalexhub.com" onPress={requestDeletion} />
+          <SettingRow icon={<Database color={colors.blue700} size={20} />} title="Data & Privacy" value="Purposes & retention" onPress={() => setPrivacyVisible(true)} />
+          <SettingRow icon={<Search color={colors.blue700} size={20} />} title="Insights consent" value={settings.behavioralConsent === 'granted' ? 'Allowed' : 'Not allowed'} onPress={chooseInsights} />
+          <SettingRow icon={<Database color={colors.blue700} size={20} />} title="Request my data" value="info@oldalexhub.com" onPress={() => requestData('access')} />
+          <SettingRow icon={<ShieldCheck color={colors.blue700} size={20} />} title="Privacy choices" onPress={() => AdsConsent.showPrivacyOptionsForm().then(() => AdsConsent.getConsentInfo()).then(info => publishAdsConsent(info.canRequestAds)).catch(() => Alert.alert('Privacy choices unavailable', 'A privacy options form is not required or is temporarily unavailable.'))} />
+          <SettingRow icon={<Database color={colors.blue700} size={20} />} title="Request data deletion" value="info@oldalexhub.com" onPress={() => requestData('delete')} />
           <SettingRow icon={<Trash2 color={colors.danger} size={20} />} title="Delete server analytics" onPress={deleteServerAnalytics} />
           <SettingRow icon={<LockKeyhole color={colors.blue700} size={20} />} title="Privacy policy" onPress={() => setPrivacyVisible(true)} last />
         </SettingsSection>
@@ -172,7 +183,7 @@ function PrivacyModal({visible, onClose}: {visible: boolean; onClose: () => void
           <Text style={styles.privacyHeading}>Local app data</Text>
           <Text style={styles.privacyText}>Download records, browser history, bookmarks, media metadata, and app preferences are stored locally. Private browsing does not add pages to local history. Downloaded media stays on the device or in a folder you select.</Text>
           <Text style={styles.privacyHeading}>Old Alex Hub analytics</Text>
-          <Text style={styles.privacyText}>Performance & playback analytics sends an anonymous installation ID and structured measurements about sessions, detection, downloads, playback, ads, and coded failures. Completed non-private downloads also share their original page and media links; common authentication query parameters are removed. Media files, cookies, authorization headers, filenames, and titles are not sent. Search & website insights separately includes submitted search terms and visited domains from non-private sessions. Both settings are on by default and independently switchable. Turning analytics off clears queued events. Delete server analytics removes data linked to the current anonymous identifier and rotates it. You can also request deletion by emailing info@oldalexhub.com using the Settings action.</Text>
+          <Text style={styles.privacyText}>Operational measurements cover sessions, feature use, detection and download outcomes, failures and advertising performance. The installation reference is pseudonymous; the server stores its keyed hash. With your affirmative Insights consent, broader collection includes submitted search terms, visited domains, playback measurements and sanitized completed-download links. Link paths may remain; user information, all queries and fragments are removed. Private-session details, media bytes, page content, cookies, credentials, titles and filenames are excluded. Withdraw Insights consent at any time to clear queued events and stop new behavioral collection. Existing operational-data refusals are preserved. Raw events are kept for at most 730 days. Delete server analytics removes current-installation data, clears pending uploads and rotates the reference without changing consent. Access/deletion drafts go to info@oldalexhub.com with a seven-day verified code; only you send them. Historic installation references require separate support verification.</Text>
           <Text style={styles.privacyHeading}>Advertising</Text>
           <Text style={styles.privacyText}>Google AdMob supports the free app. Google advertising services may process advertising identifiers, approximate location, app interactions, diagnostics, and related advertising data depending on consent and device settings.</Text>
           <Text style={styles.privacyHeading}>No account</Text>

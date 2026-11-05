@@ -48,9 +48,11 @@ object AdaptiveExporter {
     val selectionToken: String,
   )
 
-  fun inspect(context: Context, sourceUrl: String, requestHeaders: Map<String, String>): List<InspectedVariant> {
+  fun inspect(context: Context, sourceUrl: String, requestHeaders: Map<String, String>, mimeType: String? = null): List<InspectedVariant> {
     val completion = CompletableFuture<List<InspectedVariant>>()
+    val helperRef = java.util.concurrent.atomic.AtomicReference<DownloadHelper>()
     Handler(Looper.getMainLooper()).post {
+      if (completion.isDone) return@post
       val upstream = DefaultHttpDataSource.Factory()
         .setAllowCrossProtocolRedirects(true)
         .setConnectTimeoutMs(20_000)
@@ -58,19 +60,21 @@ object AdaptiveExporter {
         .setDefaultRequestProperties(requestHeaders)
       val mediaItem = MediaItem.Builder()
         .setUri(sourceUrl)
-        .setMimeType(if (sourceUrl.substringBefore('?').endsWith(".mpd", true)) "application/dash+xml" else "application/x-mpegURL")
+        .setMimeType(mimeType ?: if (sourceUrl.substringBefore('?').endsWith(".mpd", true)) "application/dash+xml" else "application/x-mpegURL")
         .build()
       val helper = DownloadHelper.Factory()
         .setRenderersFactory(DefaultRenderersFactory(context))
         .setDataSourceFactory(upstream)
         .create(mediaItem)
+      helperRef.set(helper)
       helper.prepare(object : DownloadHelper.Callback {
         override fun onPrepared(helper: DownloadHelper, tracksInfoAvailable: Boolean) {
           try {
             if (!tracksInfoAvailable) throw IOException("Adaptive tracks are unavailable")
+            if (helper.periodCount != 1) throw IOException("Multi-period adaptive streams are not supported")
             data class LocatedFormat(val period: Int, val renderer: Int, val group: Int, val track: Int, val format: Format)
             val videoFormats = mutableListOf<LocatedFormat>()
-            val audioFormats = mutableListOf<Format>()
+            val audioFormats = mutableListOf<LocatedFormat>()
             for (period in 0 until helper.periodCount) {
               val mapped = helper.getMappedTrackInfo(period)
               for (renderer in 0 until mapped.rendererCount) {
@@ -82,13 +86,14 @@ object AdaptiveExporter {
                     if (mapped.getTrackSupport(renderer, groupIndex, trackIndex) != C.FORMAT_HANDLED) continue
                     when (mapped.getRendererType(renderer)) {
                       C.TRACK_TYPE_VIDEO -> videoFormats += LocatedFormat(period, renderer, groupIndex, trackIndex, format)
-                      C.TRACK_TYPE_AUDIO -> audioFormats += format
+                      C.TRACK_TYPE_AUDIO -> audioFormats += LocatedFormat(period, renderer, groupIndex, trackIndex, format)
                     }
                   }
                 }
               }
             }
-            val audio = audioFormats.firstOrNull { it.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0 } ?: audioFormats.firstOrNull()
+            val selectedAudio = audioFormats.firstOrNull { it.format.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0 } ?: audioFormats.firstOrNull()
+            val audio = selectedAudio?.format
             val hasAudio = audio != null
             val audioCodec = audio?.codecs.orEmpty()
             val audioLanguage = audio?.language
@@ -104,7 +109,7 @@ object AdaptiveExporter {
                 hasAudio = hasAudio,
                 audioMode = if (hasAudio) "separate" else "none",
                 protected = format.drmInitData != null || audio?.drmInitData != null,
-                selectionToken = "period:${located.period}:renderer:${located.renderer}:group:${located.group}:track:${located.track}:height:${format.height.takeUnless { it == Format.NO_VALUE } ?: 0}",
+                selectionToken = "period:${located.period}:renderer:${located.renderer}:group:${located.group}:track:${located.track}:height:${format.height.takeUnless { it == Format.NO_VALUE } ?: 0}:fingerprint:${trackFingerprint(format)}:audioRenderer:${selectedAudio?.renderer ?: -1}:audioGroup:${selectedAudio?.group ?: -1}:audioTrack:${selectedAudio?.track ?: -1}:audioFingerprint:${audio?.let(::trackFingerprint) ?: 0}",
               )
             }.distinctBy { listOf(it.width, it.height, it.bitrate, it.videoCodec, it.audioCodec) }
             if (variants.isEmpty()) throw IOException("The manifest has no supported video tracks")
@@ -112,17 +117,20 @@ object AdaptiveExporter {
           } catch (error: Exception) {
             completion.completeExceptionally(error)
           } finally {
-            helper.release()
+            helperRef.getAndSet(null)?.release()
           }
         }
 
         override fun onPrepareError(helper: DownloadHelper, e: IOException) {
-          helper.release()
+          helperRef.getAndSet(null)?.release()
           completion.completeExceptionally(e)
         }
       })
     }
-    return completion.get(30, TimeUnit.SECONDS)
+    return try {completion.get(15, TimeUnit.SECONDS)} finally {
+      if (!completion.isDone) completion.cancel(true)
+      Handler(Looper.getMainLooper()).post {helperRef.getAndSet(null)?.release()}
+    }
   }
 
   fun export(
@@ -187,15 +195,19 @@ object AdaptiveExporter {
 
   private fun selectTracks(context: Context, record: DownloadRecord, dataSourceFactory: CacheDataSource.Factory): MediaItem {
     val result = CompletableFuture<MediaItem>()
+    val helperRef = java.util.concurrent.atomic.AtomicReference<DownloadHelper>()
     Handler(Looper.getMainLooper()).post {
+      if (result.isDone) return@post
       val helper = DownloadHelper.Factory()
         .setRenderersFactory(DefaultRenderersFactory(context))
         .setDataSourceFactory(dataSourceFactory)
-        .create(MediaItem.fromUri(record.sourceUrl))
+        .create(MediaItem.Builder().setUri(record.sourceUrl).setMimeType(if (record.protocol == "dash") "application/dash+xml" else "application/x-mpegURL").build())
+      helperRef.set(helper)
       helper.prepare(object : DownloadHelper.Callback {
         override fun onPrepared(helper: DownloadHelper, tracksInfoAvailable: Boolean) {
           try {
             if (!tracksInfoAvailable) throw IOException("Adaptive tracks are unavailable")
+            if (helper.periodCount != 1) throw IOException("Multi-period adaptive streams are not supported")
             var hasCompatibleVideo = false
             var hasCompatibleAudio = false
             var hasProtection = false
@@ -216,7 +228,7 @@ object AdaptiveExporter {
               }
             }
             if (hasProtection) throw IOException("Protected adaptive media is not supported")
-            if (!hasCompatibleVideo || !hasCompatibleAudio) throw IOException("No compatible video and audio combination is available")
+            if (!hasCompatibleVideo || (record.audioMode != "none" && !hasCompatibleAudio)) throw IOException("No compatible video and audio combination is available")
             val targetHeight = record.resolution?.filter(Char::isDigit)?.toIntOrNull() ?: 0
             val token = parseSelectionToken(record.selectionToken)
             val baseParameters = DownloadHelper.DEFAULT_TRACK_SELECTOR_PARAMETERS.buildUpon().apply {
@@ -229,12 +241,22 @@ object AdaptiveExporter {
               var parameters = baseParameters
               if (token != null && token.period == period) {
                 val mapped = helper.getMappedTrackInfo(period)
+                if (token.renderer !in 0 until mapped.rendererCount) throw IOException("Selected tracks changed; inspect the source again")
                 val groups = mapped.getTrackGroups(token.renderer)
-                if (token.group in 0 until groups.length && token.track in 0 until groups[token.group].length) {
-                  parameters = baseParameters.buildUpon()
-                    .setOverrideForType(TrackSelectionOverride(groups[token.group], listOf(token.track)))
-                    .build()
+                if (token.group !in 0 until groups.length || token.track !in 0 until groups[token.group].length) throw IOException("Selected tracks changed; inspect the source again")
+                val selected = groups[token.group].getFormat(token.track)
+                if (token.fingerprint != null && token.fingerprint != trackFingerprint(selected)) throw IOException("Selected video changed; inspect the source again")
+                val builder = baseParameters.buildUpon()
+                  .setOverrideForType(TrackSelectionOverride(groups[token.group], listOf(token.track)))
+                if (token.audioRenderer >= 0) {
+                  if (token.audioRenderer !in 0 until mapped.rendererCount) throw IOException("Selected audio changed")
+                  val audioGroups = mapped.getTrackGroups(token.audioRenderer)
+                  if (token.audioGroup !in 0 until audioGroups.length || token.audioTrack !in 0 until audioGroups[token.audioGroup].length) throw IOException("Selected audio changed")
+                  if (token.audioFingerprint != trackFingerprint(audioGroups[token.audioGroup].getFormat(token.audioTrack))) throw IOException("Selected audio changed")
+                  builder.setOverrideForType(TrackSelectionOverride(audioGroups[token.audioGroup], listOf(token.audioTrack)))
                 }
+                if (record.audioMode == "none") builder.setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                parameters = builder.build()
               }
               helper.replaceTrackSelections(period, parameters)
             }
@@ -243,17 +265,20 @@ object AdaptiveExporter {
           } catch (error: Exception) {
             result.completeExceptionally(error)
           } finally {
-            helper.release()
+            helperRef.getAndSet(null)?.release()
           }
         }
 
         override fun onPrepareError(helper: DownloadHelper, e: IOException) {
-          helper.release()
+          helperRef.getAndSet(null)?.release()
           result.completeExceptionally(e)
         }
       })
     }
-    return result.get(30, TimeUnit.SECONDS)
+    return try {result.get(20, TimeUnit.SECONDS)} finally {
+      if (!result.isDone) result.cancel(true)
+      Handler(Looper.getMainLooper()).post {helperRef.getAndSet(null)?.release()}
+    }
   }
 
   private fun headers(record: DownloadRecord): Map<String, String> {
@@ -266,7 +291,10 @@ object AdaptiveExporter {
     }
   }
 
-  private data class SelectionToken(val period: Int, val renderer: Int, val group: Int, val track: Int)
+  private fun trackFingerprint(format: Format): Int = listOf(format.id, format.width, format.height, format.bitrate, format.codecs, format.language).joinToString("|").hashCode()
+
+  private data class SelectionToken(val period: Int, val renderer: Int, val group: Int, val track: Int,
+    val fingerprint: Int?, val audioRenderer: Int, val audioGroup: Int, val audioTrack: Int, val audioFingerprint: Int?)
 
   private fun parseSelectionToken(value: String?): SelectionToken? {
     if (value.isNullOrBlank()) return null
@@ -276,6 +304,11 @@ object AdaptiveExporter {
       renderer = fields["renderer"]?.toIntOrNull() ?: return null,
       group = fields["group"]?.toIntOrNull() ?: return null,
       track = fields["track"]?.toIntOrNull() ?: return null,
+      fingerprint = fields["fingerprint"]?.toIntOrNull(),
+      audioRenderer = fields["audioRenderer"]?.toIntOrNull() ?: -1,
+      audioGroup = fields["audioGroup"]?.toIntOrNull() ?: -1,
+      audioTrack = fields["audioTrack"]?.toIntOrNull() ?: -1,
+      audioFingerprint = fields["audioFingerprint"]?.toIntOrNull(),
     )
   }
 

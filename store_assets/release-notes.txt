@@ -1,11 +1,12 @@
-Version 2.0.0
+Version 2.0.0 (version code 10) - internal release candidate
 
-- Review every detected media item and quality before downloading
-- Choose one or several distinct videos, edit filenames, and select a destination
-- Get more accurate HLS, DASH, and direct-file detection with clear unsupported reasons
-- Download supported adaptive video with its audio in one playable MP4
-- Resume interrupted transfers and see clear download and combining stages
-- Continue watching local media from the saved playback position
-- Keep every control clear of gesture navigation, three-button navigation, cutouts, ads, and the keyboard
-- Retain the full downloader for free with the same restrained ad strategy
-- Control anonymous performance and browser insights independently, or delete server analytics from Settings
+- Independent browser tabs and normal-session restoration
+- Verified video choices first, with uncertain sources in Additional results
+- Player-aware advertisement filtering and related quality grouping
+- Passive detection retained in per-site compatibility mode
+- HLS/DASH track selection and exported-file verification
+- Library batch actions and clear removal versus file deletion
+- Affirmative Insights consent and verified access/deletion requests
+- Bounded ads after completed tasks and currency-specific revenue reporting
+
+Release gates remain: compatible backend deployment, full device/accessibility matrix, closed beta and staged observation. These notes describe the candidate; they do not certify those gates as complete.

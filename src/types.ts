@@ -15,8 +15,8 @@ export type MediaType = 'video' | 'audio' | 'image';
 
 export type SourceProtocol = 'progressive' | 'hls' | 'dash';
 export type AudioMode = 'muxed' | 'separate' | 'none' | 'unknown';
-export type MediaInspectionState = 'probing' | 'ready' | 'unsupported' | 'protected' | 'expired';
-export type DetectionSource = 'element' | 'source' | 'fetch' | 'xhr' | 'navigation' | 'manifest' | 'link';
+export type MediaInspectionState = 'probing' | 'ready' | 'uncertain' | 'unsupported' | 'protected' | 'expired';
+export type DetectionSource = 'element' | 'source' | 'fetch' | 'xhr' | 'navigation' | 'manifest' | 'link' | 'resource' | 'native';
 
 export interface RawMediaCandidate {
   candidateKey: string;
@@ -38,6 +38,12 @@ export interface RawMediaCandidate {
 }
 
 export interface MediaVariant {
+  classification?: 'content' | 'uncertain' | 'advertisement';
+  frameId?: string;
+  playerId?: string;
+  playbackGeneration?: number;
+  verifiedTracks?: boolean;
+  evidence?: string[];
   id: string;
   candidateKey?: string;
   assetId?: string;
@@ -172,6 +178,8 @@ export interface AppSettings {
   destinationUri?: string;
   analyticsEnabled: boolean;
   usageInsightsEnabled: boolean;
+  behavioralConsent: 'pending' | 'granted' | 'denied';
+  consentUpdatedAt?: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -187,5 +195,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   blockWebsiteAds: true,
   destinationName: 'Video Downloader & Media Saver',
   analyticsEnabled: true,
-  usageInsightsEnabled: true,
+  usageInsightsEnabled: false,
+  behavioralConsent: 'pending',
 };
