@@ -1,4 +1,6 @@
-Version 2.0.0 (version code 10) - internal release candidate
+Version 2.0.0 (version code 11) - internal release candidate
+
+- Fixed website-visit reporting failing before upload on Android
 
 - Independent browser tabs and normal-session restoration
 - Verified video choices first, with uncertain sources in Additional results

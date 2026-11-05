@@ -19,7 +19,7 @@ jest.mock('../src/components/ScreenContainer', () => {
   const {View, ScrollView} = require('react-native');
   return {SafeBottomSheet: View, SafeModalScreen: View, SafeScrollView: ScrollView};
 });
-jest.mock('../src/native/DownloadManager', () => ({downloadManager: {trackEvent: jest.fn().mockResolvedValue(undefined), cancelInspections: jest.fn().mockResolvedValue(true)}}));
+jest.mock('../src/native/DownloadManager', () => ({downloadManager: {trackEvent: jest.fn().mockResolvedValue(undefined), trackUsageInsight: jest.fn().mockResolvedValue(true), cancelInspections: jest.fn().mockResolvedValue(true)}}));
 jest.mock('../src/native/RemoteConfig', () => ({remoteConfig: {current: () => ({detector: {minimumImagePixels: 100000}})}}));
 jest.mock('lucide-react-native', () => {
   const {View} = require('react-native');
@@ -33,6 +33,7 @@ jest.mock('react-native-webview', () => {
   })};
 });
 import {BrowserScreen} from '../src/screens/BrowserScreen';
+import {downloadManager} from '../src/native/DownloadManager';
 
 let renderer: TestRenderer.ReactTestRenderer;
 const web = () => renderer.root.findByType('WebView' as any);
@@ -41,10 +42,25 @@ const button = (label: string) => renderer.root.findAll(node => typeof node.prop
 beforeEach(async () => {
   jest.spyOn(require('react-native'), 'findNodeHandle').mockReturnValue(null);
   mockReload.mockClear();
+  jest.mocked(downloadManager.trackUsageInsight).mockClear();
   mockContext.settings = {...DEFAULT_SETTINGS, analyticsEnabled: false};
   await act(async () => {renderer = TestRenderer.create(<BrowserScreen />);});
 });
 afterEach(async () => {await act(async () => renderer.unmount());});
+
+test('consented page visits send only the hostname and repeated completion callbacks do not duplicate a visit', async () => {
+  mockContext.settings = {...DEFAULT_SETTINGS, analyticsEnabled:true, usageInsightsEnabled:true, behavioralConsent:'granted'};
+  await act(async () => renderer.update(<BrowserScreen />));
+  const navigation = {url:'https://example.test/watch?token=private#fragment', title:'Video', loading:false};
+  await act(async () => web().props.onNavigationStateChange(navigation));
+  await act(async () => web().props.onNavigationStateChange(navigation));
+  expect(downloadManager.trackUsageInsight).toHaveBeenCalledTimes(1);
+  expect(downloadManager.trackUsageInsight).toHaveBeenCalledWith('site_visited', {siteHost:'example.test'});
+  mockContext.settings = {...mockContext.settings, usageInsightsEnabled:false, behavioralConsent:'denied'};
+  await act(async () => renderer.update(<BrowserScreen />));
+  await act(async () => web().props.onNavigationStateChange({...navigation, url:'https://other.test/'}));
+  expect(downloadManager.trackUsageInsight).toHaveBeenCalledTimes(1);
+});
 
 test('503 keeps the original response visible through load completion; retry and dismiss remain available', async () => {
   await act(async () => web().props.onHttpError({nativeEvent: {statusCode: 503}}));

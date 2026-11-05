@@ -599,8 +599,8 @@ class VDDownloadManagerModule(private val context: ReactApplicationContext) :
     val json = when (name) {
       "search_performed" -> properties.getString("term")?.trim()?.take(80)
         ?.takeIf { it.isNotBlank() }?.let { JSONObject().put("term", it) }
-      "site_visited" -> properties.getString("siteHost")?.trim()?.lowercase()?.take(253)
-        ?.takeIf { it.matches(Regex("^[a-z0-9.:[\\]-]+$")) }?.let { JSONObject().put("siteHost", it) }
+      "site_visited" -> InsightHost.normalize(properties.getString("siteHost"))
+        ?.let { JSONObject().put("siteHost", it) }
       else -> null
     }
     if (json != null) Telemetry.recordUsageInsight(context, name, json)
